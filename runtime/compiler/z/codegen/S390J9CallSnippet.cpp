@@ -1263,7 +1263,9 @@ uint8_t *TR::J9S390InterfaceCallDataSnippet::emitSnippetBody()
             TR_ResolvedMethod *profiledMethod = methodSymRef->getOwningMethod(comp)->getResolvedInterfaceMethod(comp,
                 (TR_OpaqueClassBlock *)(*valuesIt), methodSymRef->getCPIndex());
             numInterfaceCallCacheSlots--;
-            updateField = true;
+            if (!isSingleDynamic) {
+                updateField = true;
+            }
 #if defined(TR_TARGET_64BIT)
             if (comp->target().is64Bit() && TR::Compiler->om.generateCompressedObjectHeaders())
                 *(uintptr_t *)cursor = (uintptr_t)(*valuesIt) << 32;
