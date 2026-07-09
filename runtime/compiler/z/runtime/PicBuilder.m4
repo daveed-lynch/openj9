@@ -1374,8 +1374,7 @@ LABEL(LcontinueLookup)
 
     L_GPR   r3,eq_codeRA_inInterfaceSnippet(,r14) #Load code cache RA
 
-ZZ  # Load address of interface table & slot number
-    LA      r2,eq_intfAddr_inInterfaceSnippet(,r14)
+ZZ  # Load this pointer and receiver class
     L_GPR   r1,(2*PTR_SIZE)(,J9SP)  # Load this
 IfCompressedElse({dnl
     L       r1,J9TR_J9Object_class(,r1)
@@ -1386,6 +1385,45 @@ ZZ # Load lookup class offset
 ZZ # Load lookup class
 })dnl
     NILL    r1,HEX(10000)-J9TR_RequiredClassAlignment
+ifdef({NO_HELPER_LASTITABLE_CHECK},,{dnl
+
+ZZ Before iTable walk or going to the VM helper, check
+ZZ if the receiver class lastITable matches the interface
+ZZ class of the method being called and if so, use it
+ZZ to quickly look up the vtable offset and make the call
+ZZ First load the interface class of the method from the snippet
+    L_GPR   rEP,eq_intfAddr_inInterfaceSnippet(,r14)
+    L_GPR   r2,J9TR_J9Class_lastITable(r1)      # Load the cached last ITable
+    L_GPR   r3,J9TR_J9ITable_interfaceClass(r2) # Load the interface class whose ITable this is
+    CR_GPR  rEP,r3
+ifdef({NO_ITABLEWALK_CHECK},{dnl
+    JNZ     LcallHelper
+},{dnl
+    JZ      LhitITable
+ZZ Before going to the VM helper, we will saturate iTable walking
+    L_GPR   r2,J9TR_J9Class_iTable(r1)          # Load the iTable pointer
+LABEL(LiTableLoop)
+    CHI_GPR r2,0                                # check iTable != null
+    JZ      LcallHelper
+    L_GPR   r3,J9TR_J9ITable_interfaceClass(r2) # Load iTable class
+    CR_GPR  rEP,r3
+    JZ      LhitITable
+    L_GPR   r2,J9TR_J9ITable_next(r2)           # Load the next iTable pointer
+    J       LiTableLoop
+})dnl
+ZZ ITable entry is a match
+LABEL(LhitITable)
+ZZ Load the itable offset from the snippet
+    L_GPR   rEP,eq_intfMethodIndex_inInterfaceSnippet(r14)
+    TMLL    rEP,J9TR_J9_ITABLE_OFFSET_TAG_BITS  # Call the helper if the itable offset is tagged
+    JNZ     LcallHelper
+    L_GPR   r2,0(rEP,r2)                        # Load the interpreter vft offset
+    J       LcommonJitDispatch
+LABEL(LcallHelper)
+})dnl
+
+ZZ  # Load address of interface table & slot number
+    LA      r2,eq_intfAddr_inInterfaceSnippet(,r14)
 
 LOAD_ADDR_FROM_TOC(r14,TR_S390jitLookupInterfaceMethod)
 
@@ -1476,8 +1514,7 @@ LABEL(ifCH1LcontinueLookup)
 
     L_GPR   r3,eq_codeRA_inInterfaceSnippet(,r14) #Load code cache RA
 
-ZZ  # Load address of interface table & slot number
-    LA      r2,eq_intfAddr_inInterfaceSnippet(,r14)
+ZZ  # Load this pointer and receiver class
     L_GPR   r1,(2*PTR_SIZE)(,J9SP)       # Load this
 IfCompressedElse({dnl
     L       r1,J9TR_J9Object_class(,r1)
@@ -1488,6 +1525,45 @@ ZZ # Load lookup class offset
 ZZ # Load lookup class
 })dnl
     NILL    r1,HEX(10000)-J9TR_RequiredClassAlignment
+ifdef({NO_HELPER_LASTITABLE_CHECK},,{dnl
+
+ZZ Before iTable walk or going to the VM helper, check
+ZZ if the receiver class lastITable matches the interface
+ZZ class of the method being called and if so, use it
+ZZ to quickly look up the vtable offset and make the call
+ZZ First load the interface class of the method from the snippet
+    L_GPR   rEP,eq_intfAddr_inInterfaceSnippet(,r14)
+    L_GPR   r2,J9TR_J9Class_lastITable(r1)      # Load the cached last ITable
+    L_GPR   r3,J9TR_J9ITable_interfaceClass(r2) # Load the interface class whose ITable this is
+    CR_GPR  rEP,r3
+ifdef({NO_ITABLEWALK_CHECK},{dnl
+    JNZ     ifCH1LcallHelper
+},{dnl
+    JZ      ifCH1LhitITable
+ZZ Before going to the VM helper, we will saturate iTable walking
+    L_GPR   r2,J9TR_J9Class_iTable(r1)          # Load the iTable pointer
+LABEL(ifCH1LiTableLoop)
+    CHI_GPR r2,0                                # check iTable != null
+    JZ      ifCH1LcallHelper
+    L_GPR   r3,J9TR_J9ITable_interfaceClass(r2) # Load iTable class
+    CR_GPR  rEP,r3
+    JZ      ifCH1LhitITable
+    L_GPR   r2,J9TR_J9ITable_next(r2)           # Load the next iTable pointer
+    J       ifCH1LiTableLoop
+})dnl
+ZZ ITable entry is a match
+LABEL(ifCH1LhitITable)
+ZZ Load the itable offset from the snippet
+    L_GPR   rEP,eq_intfMethodIndex_inInterfaceSnippet(r14)
+    TMLL    rEP,J9TR_J9_ITABLE_OFFSET_TAG_BITS  # Call the helper if the itable offset is tagged
+    JNZ     ifCH1LcallHelper
+    L_GPR   rEP,0(rEP,r2)                       # Load the interpreter vft offset
+    J       ifCH1LcommonJitDispatch
+LABEL(ifCH1LcallHelper)
+})dnl
+
+ZZ  # Load address of interface table & slot number
+    LA      r2,eq_intfAddr_inInterfaceSnippet(,r14)
 
 LOAD_ADDR_FROM_TOC(r14,TR_S390jitLookupInterfaceMethod)
 
@@ -1731,8 +1807,7 @@ LABEL(ifCHMLcontinueLookup)
 
     L_GPR   r3,eq_codeRA_inInterfaceSnippet(,r14) #Load code cache RA
 
-ZZ  # Load address of interface table & slot number
-    LA      r2,eq_intfAddr_inInterfaceSnippet(,r14)
+ZZ  # Load this pointer and receiver class
     L_GPR   r1,(2*PTR_SIZE)(,J9SP)       # Load this
 IfCompressedElse({dnl
     L       r1,J9TR_J9Object_class(,r1)
@@ -1743,6 +1818,45 @@ ZZ # Load offset of lookup class
 ZZ # Load lookup class
 })dnl
     NILL    r1,HEX(10000)-J9TR_RequiredClassAlignment
+ifdef({NO_HELPER_LASTITABLE_CHECK},,{dnl
+
+ZZ Before iTable walk or going to the VM helper, check
+ZZ if the receiver class lastITable matches the interface
+ZZ class of the method being called and if so, use it
+ZZ to quickly look up the vtable offset and make the call
+ZZ First load the interface class of the method from the snippet
+    L_GPR   rEP,eq_intfAddr_inInterfaceSnippet(,r14)
+    L_GPR   r2,J9TR_J9Class_lastITable(r1)      # Load the cached last ITable
+    L_GPR   r3,J9TR_J9ITable_interfaceClass(r2) # Load the interface class whose ITable this is
+    CR_GPR  rEP,r3
+ifdef({NO_ITABLEWALK_CHECK},{dnl
+    JNZ     ifCHMLcallHelper
+},{dnl
+    JZ      ifCHMLhitITable
+ZZ Before going to the VM helper, we will saturate iTable walking
+    L_GPR   r2,J9TR_J9Class_iTable(r1)          # Load the iTable pointer
+LABEL(ifCHMLiTableLoop)
+    CHI_GPR r2,0                                # check iTable != null
+    JZ      ifCHMLcallHelper
+    L_GPR   r3,J9TR_J9ITable_interfaceClass(r2) # Load iTable class
+    CR_GPR  rEP,r3
+    JZ      ifCHMLhitITable
+    L_GPR   r2,J9TR_J9ITable_next(r2)           # Load the next iTable pointer
+    J       ifCHMLiTableLoop
+})dnl
+ZZ ITable entry is a match
+LABEL(ifCHMLhitITable)
+ZZ Load the itable offset from the snippet
+    L_GPR   rEP,eq_intfMethodIndex_inInterfaceSnippet(r14)
+    TMLL    rEP,J9TR_J9_ITABLE_OFFSET_TAG_BITS  # Call the helper if the itable offset is tagged
+    JNZ     ifCHMLcallHelper
+    L_GPR   rEP,0(rEP,r2)                       # Load the interpreter vft offset
+    J       ifCHMLcommonJitDispatch
+LABEL(ifCHMLcallHelper)
+})dnl
+
+ZZ  # Load address of interface table & slot number
+    LA      r2,eq_intfAddr_inInterfaceSnippet(,r14)
 
 LOAD_ADDR_FROM_TOC(r14,TR_S390jitLookupInterfaceMethod)
 

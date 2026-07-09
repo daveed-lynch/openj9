@@ -1103,17 +1103,20 @@ uint8_t *TR::J9S390InterfaceCallDataSnippet::emitSnippetBody()
      *   DC          0x0000000000202990  # Address of constant pool
      *   DC          0x0000000000000008  # CP index
      *   DC          0x0000000000000000  # Interface class   (vm helper will fill it up with call resolution class info)
-     *   DC          0x0000000000000000  # Method index      (vm helper will fill it up with call resolution method
-     * info. This contains J9method if it's direct dispatch. It's I-table offset if it's a normal interface call) DC
-     * 0x0000000084ffd408  # J2I thunk         (J2I thunk address) DC          0x0000000000000000  # flags (this 64-bit
-     * number is initially 0, meaning the call is unresolved. It'll be 1 once resolved) DC          0x0000000084e00408
-     * # last cached slot DC          0x0000000084e00418  # first slot        (address of class pointer 0) DC
-     * 0x0000000084e00448  # last slot         (address of class pointer 3) DC          0x0000000000000000  # class
-     * pointer 0   (8 or 16 byte aligned PIC slots. all PICs starting from this point are un-used if the call is
-     * resolved as private, which is direct dispatch) DC          0x0000000000000000  # method pointer 0 DC
-     * 0x0000000000000000  # class pointer 1 DC          0x0000000000000000  # method pointer 1 DC 0x0000000000000000  #
-     * class pointer 2 DC          0x0000000000000000  # method pointer 2 DC          0x0000000000000000  # class
-     * pointer 3 DC          0x0000000000000000  # method pointer 3
+     *   DC          0x0000000000000000  # Method index      (vm helper will fill it up with call resolution method info. This contains J9method if it's direct dispatch. It's I-table offset if it's a normal interface call)
+         DC          0x0000000084ffd408  # J2I thunk         (J2I thunk address)
+         DC          0x0000000000000000  # flags (this 64-bit number is initially 0, meaning the call is unresolved. It'll be 1 once resolved)
+         DC          0x0000000084e00408 last cached slot
+         DC          0x0000000084e00418  # first slot        (address of class pointer 0)
+         DC          0x0000000084e00448  # last slot         (address of class pointer 3)
+         DC          0x0000000000000000  # class pointer 0   (8 or 16 byte aligned PIC slots. all PICs starting from this point are un-used if the call is resolved as private, which is direct dispatch)
+         DC          0x0000000000000000  # method pointer 0
+         DC          0x0000000000000000  # class pointer 1
+         DC          0x0000000000000000  # method pointer 1
+         DC          0x0000000000000000  #class pointer 2
+         DC          0x0000000000000000  # method pointer 2
+         DC          0x0000000000000000  # class pointer 3
+         DC          0x0000000000000000  # method pointer 3
      *
      * If we use CLFI / BRCL
      *  DC  0x0000000000000000       ; Patch slot of the first CLFI (Class 1)
@@ -1263,7 +1266,9 @@ uint8_t *TR::J9S390InterfaceCallDataSnippet::emitSnippetBody()
             TR_ResolvedMethod *profiledMethod = methodSymRef->getOwningMethod(comp)->getResolvedInterfaceMethod(comp,
                 (TR_OpaqueClassBlock *)(*valuesIt), methodSymRef->getCPIndex());
             numInterfaceCallCacheSlots--;
-            updateField = true;
+            if (!isSingleDynamic) {
+                updateField = true;
+            }
 #if defined(TR_TARGET_64BIT)
             if (comp->target().is64Bit() && TR::Compiler->om.generateCompressedObjectHeaders())
                 *(uintptr_t *)cursor = (uintptr_t)(*valuesIt) << 32;
