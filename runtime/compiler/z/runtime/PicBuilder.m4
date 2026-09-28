@@ -1862,7 +1862,7 @@ LOAD_ADDR_FROM_TOC(r14,TR_S390jitLookupInterfaceMethod)
 
     BASR    r14,r14         # Call jitLookupInterfaceMethod and
     LR_GPR  rEP,r2          # copy the returned interpVtable offset
-LABEL(skipHelperCall)
+
 ZZ                          # returned interpVtable offset in r2
     L_GPR   r1,(2*PTR_SIZE)(,J9SP)       # Load this
 IfCompressedElse({dnl
@@ -1878,7 +1878,7 @@ ZZ # Load the address of the lookup class
     TM      eq_methodCompiledFlagOffset(r3),J9TR_MethodNotCompiledBit
     LR_GPR  r14,r0
     JNZ     ifCHMLcommonJitDispatch
-
+LABEL(skipHelperCall)
 ZZ  #Load receiving object classPtr in R2
 IfCompressedElse({dnl
     L       r2,J9TR_J9Object_class(,r1)
