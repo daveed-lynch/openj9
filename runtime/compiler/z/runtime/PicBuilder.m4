@@ -1851,6 +1851,7 @@ ZZ Load the itable offset from the snippet
     TMLL    rEP,J9TR_J9_ITABLE_OFFSET_TAG_BITS  # Call the helper if the itable offset is tagged
     JNZ     ifCHMLcallHelper
     L_GPR   rEP,0(rEP,r2)                       # Load the interpreter vft offset
+    J       ifCHMLcommonJitDispatch
     J       skipHelperCall
 LABEL(ifCHMLcallHelper)
 })dnl
