@@ -1851,7 +1851,7 @@ ZZ Load the itable offset from the snippet
     TMLL    rEP,J9TR_J9_ITABLE_OFFSET_TAG_BITS  # Call the helper if the itable offset is tagged
     JNZ     ifCHMLcallHelper
     L_GPR   rEP,0(rEP,r2)                       # Load the interpreter vft offset
-    J       ifCHMLcommonJitDispatch
+    J       skipHelperCall
 LABEL(ifCHMLcallHelper)
 })dnl
 
@@ -1862,7 +1862,7 @@ LOAD_ADDR_FROM_TOC(r14,TR_S390jitLookupInterfaceMethod)
 
     BASR    r14,r14         # Call jitLookupInterfaceMethod and
     LR_GPR  rEP,r2          # copy the returned interpVtable offset
-
+LABEL(skipHelperCall)
 ZZ                          # returned interpVtable offset in r2
     L_GPR   r1,(2*PTR_SIZE)(,J9SP)       # Load this
 IfCompressedElse({dnl
