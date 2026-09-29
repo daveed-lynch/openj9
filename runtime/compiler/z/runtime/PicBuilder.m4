@@ -1879,7 +1879,7 @@ ZZ # Load the address of the lookup class
     TM      eq_methodCompiledFlagOffset(r3),J9TR_MethodNotCompiledBit
     LR_GPR  r14,r0
     JNZ     ifCHMLcommonJitDispatch
-LABEL(skipHelperCall)
+
 ZZ  #Load receiving object classPtr in R2
 IfCompressedElse({dnl
     L       r2,J9TR_J9Object_class(,r1)
@@ -1910,7 +1910,7 @@ ZZ                        # jit-to-jit offset, so we need to
     LR_GPR  r14,r0
 
 ZZ  r2 is classPtr and r3 is jit-to-jit entry point
-
+LABEL(skipHelperCall)
 ZZ  if lastCachedSlot == lastSlot, no more slots left to cache,
 ZZ  so just dispatch
     L_GPR   r0,eq_lastCachedSlotField_inInterfaceSnippet(r14)
