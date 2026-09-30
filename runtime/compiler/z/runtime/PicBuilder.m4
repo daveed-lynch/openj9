@@ -1852,7 +1852,6 @@ ZZ Load the itable offset from the snippet
     JNZ     ifCHMLcallHelper
     L_GPR   rEP,0(rEP,r2)                       # Load the interpreter vft offset
     LR_GPR  r2, rEP                             # Need the interpreter vtable offset in r2 as well
-    J       ifCHMLcommonJitDispatch
     J       skipHelperCall
 LABEL(ifCHMLcallHelper)
 })dnl
