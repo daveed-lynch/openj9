@@ -1862,6 +1862,7 @@ ZZ  # Load address of interface table & slot number
 LOAD_ADDR_FROM_TOC(r14,TR_S390jitLookupInterfaceMethod)
 
     BASR    r14,r14         # Call jitLookupInterfaceMethod and
+LABEL(skipHelperCall)
     LR_GPR  rEP,r2          # copy the returned interpVtable offset
 
 ZZ                          # returned interpVtable offset in r2
@@ -1910,7 +1911,7 @@ ZZ                        # jit-to-jit offset, so we need to
     LR_GPR  r14,r0
 
 ZZ  r2 is classPtr and r3 is jit-to-jit entry point
-LABEL(skipHelperCall)
+
 ZZ  if lastCachedSlot == lastSlot, no more slots left to cache,
 ZZ  so just dispatch
     L_GPR   r0,eq_lastCachedSlotField_inInterfaceSnippet(r14)
