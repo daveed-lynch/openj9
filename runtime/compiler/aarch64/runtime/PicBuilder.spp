@@ -1132,6 +1132,9 @@ L_hitITable:
 	neg	x11, x11
 	add	x11, x11, #J9TR_InterpVTableOffset		// Convert to a JIT vft offset
 	mov x0, x11                         // Offset needs to be in x0 when we go to dispatch
+	b	L_commonJitDispatch
+
+//this stuff should be what happens in commonjitdispatch
 	ldr	x12, [x14, x11]					// Load the method
 //	mov	x16, x12 // @@ for debug @@
 //	mov	x17, x30 // @@ for debug @@
