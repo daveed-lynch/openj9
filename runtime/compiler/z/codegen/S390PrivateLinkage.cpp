@@ -50,6 +50,7 @@
 #include "z/codegen/S390StackCheckFailureSnippet.hpp"
 #include "z/codegen/SystemLinkage.hpp"
 #include "z/codegen/SystemLinkagezOS.hpp"
+#include "ras/DebugCounter.hpp"
 #include "ras/Logger.hpp"
 #include "runtime/J9Profiler.hpp"
 #include "runtime/J9ValueProfiler.hpp"
@@ -1528,9 +1529,23 @@ TR::Instruction *generateLastITableAndITableInstructions(TR::CodeGenerator *cg, 
             noLastITableMatchLabel, oolCursor);
         iComment("No Match, jump to next test.", oolCursor)
 
-            /********* Step 2: Dispatch to the method implementation. *********/
-            if (checkITableEntries) oolCursor
-            = generateS390LabelInstruction(cg, TR::InstOpCode::label, callNode, matchLabel, oolCursor);
+        oolCursor = cg->generateDebugCounter(oolCursor,
+            TR::DebugCounter::debugCounterName(comp, "ipic/lastITable/hit"),
+            1, TR::DebugCounter::Cheap);
+
+        TR::LabelSymbol *dispatchLabel = generateLabelSymbol(cg);
+        oolCursor = generateS390BranchInstruction(cg, TR::InstOpCode::BRC, TR::InstOpCode::COND_B, callNode,
+            dispatchLabel, oolCursor);
+
+        /********* Step 2: Dispatch to the method implementation. *********/
+        if (checkITableEntries) {
+            oolCursor = generateS390LabelInstruction(cg, TR::InstOpCode::label, callNode, matchLabel, oolCursor);
+            oolCursor = cg->generateDebugCounter(oolCursor,
+                TR::DebugCounter::debugCounterName(comp, "ipic/iTable/hit"),
+                1, TR::DebugCounter::Cheap);
+        }
+
+        oolCursor = generateS390LabelInstruction(cg, TR::InstOpCode::label, callNode, dispatchLabel, oolCursor);
         // Calculating vTableIndex value. vTableIndexRegister must have the vTableIndex value when dispatching.
         oolCursor = generateRIInstruction(cg, TR::InstOpCode::getLoadHalfWordImmOpCode(), callNode, vTableIndexRegister,
             fej9->getITableEntryJitVTableOffset(), oolCursor);
@@ -2122,6 +2137,10 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
             cursor = generateLastITableAndITableInstructions(cg(), callNode, vftReg, regEP, vTableIndexRegister,
                 methodRegister, postDeps, cursor);
 
+            cursor = cg()->generateDebugCounter(cursor,
+                TR::DebugCounter::debugCounterName(comp(), "ipic/miss"),
+                1, TR::DebugCounter::Cheap);
+
             cursor = new (trHeapMemory())
                 TR::S390RILInstruction(TR::InstOpCode::LARL, callNode, regEP, ifcSnippet, cursor, cg());
 
@@ -2201,13 +2220,27 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                 cursor = generateRXInstruction(cg(), TR::InstOpCode::getCmpLogicalOpCode(), callNode, classRegister,
                     generateS390MemoryReference(regThis, 0, cg()), cursor);
 
-                // Cache hit? then jumpto cached method entrypoint directly
+                TR::LabelSymbol *singleSlotMissLabel = generateLabelSymbol(cg());
+                cursor = generateS390BranchInstruction(cg(), TR::InstOpCode::BRC,
+                    TR::InstOpCode::COND_BNE, callNode, singleSlotMissLabel, cursor);
+
+                // Cache hit? then bump counter and jumpto cached method entrypoint directly
+                cursor = cg()->generateDebugCounter(cursor,
+                    TR::DebugCounter::debugCounterName(comp(), "ipic/slot0/hit"),
+                    1, TR::DebugCounter::Cheap);
+
                 cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
-                ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BER);
+                ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BCR);
+
+                cursor = generateS390LabelInstruction(cg(), TR::InstOpCode::label, callNode, singleSlotMissLabel, cursor);
 
                 // Add instructions for LastITable and ITable check.
                 cursor = generateLastITableAndITableInstructions(cg(), callNode, vftReg, snippetReg,
                     vTableIndexRegister, methodRegister, postDeps, cursor);
+
+                cursor = cg()->generateDebugCounter(cursor,
+                    TR::DebugCounter::debugCounterName(comp(), "ipic/miss"),
+                    1, TR::DebugCounter::Cheap);
 
                 cursor = new (trHeapMemory())
                     TR::S390RILInstruction(TR::InstOpCode::LARL, callNode, regEP, ifcSnippet, cursor, cg());
@@ -2289,6 +2322,17 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                         cursor = generateRXInstruction(cg(), cmpOp, callNode, vftReg,
                             generateS390MemoryReference(snippetReg, slotOffset, cg()), cursor);
 
+                        TR::LabelSymbol *nextSlotLabel = generateLabelSymbol(cg());
+
+                        // If not matching, jump to next slot
+                        cursor = generateS390BranchInstruction(cg(), TR::InstOpCode::BRC,
+                            TR::InstOpCode::COND_BNE, callNode, nextSlotLabel, cursor);
+
+                        // Slot hit
+                        cursor = cg()->generateDebugCounter(cursor,
+                            TR::DebugCounter::debugCounterName(comp(), "ipic/slot%d/hit", i),
+                            1, TR::DebugCounter::Cheap);
+
                         cursor = generateRXInstruction(cg(), TR::InstOpCode::getLoadOpCode(), callNode, methodRegister,
                             generateS390MemoryReference(snippetReg,
                                 slotOffset + TR::Compiler->om.sizeofReferenceAddress(), cg()),
@@ -2296,7 +2340,9 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
 
                         cursor
                             = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
-                        ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BER);
+                        ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BCR);
+
+                        cursor = generateS390LabelInstruction(cg(), TR::InstOpCode::label, callNode, nextSlotLabel, cursor);
 
                         slotOffset += 2 * TR::Compiler->om.sizeofReferenceAddress();
                     }
@@ -2305,6 +2351,10 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                 // Add instructions for LastITable and ITable check.
                 cursor = generateLastITableAndITableInstructions(cg(), callNode, vftReg, regEP, vTableIndexRegister,
                     methodRegister, postDeps, cursor);
+
+                cursor = cg()->generateDebugCounter(cursor,
+                    TR::DebugCounter::debugCounterName(comp(), "ipic/miss"),
+                    1, TR::DebugCounter::Cheap);
 
                 cursor = new (trHeapMemory())
                     TR::S390RILInstruction(TR::InstOpCode::LARL, callNode, snippetReg, ifcSnippet, cursor, cg());
