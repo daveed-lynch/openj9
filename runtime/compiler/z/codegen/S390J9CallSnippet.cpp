@@ -1177,7 +1177,9 @@ uint8_t *TR::J9S390InterfaceCallDataSnippet::emitSnippetBody()
     cursor += TR::Compiler->om.sizeofReferenceAddress();
 
     // constant pool
-    *(uintptr_t *)cursor = (uintptr_t)callNode->getSymbolReference()->getOwningMethod(comp)->constantPool();
+    TR_ResolvedMethod *owningMethod = callNode->getSymbolReference()->getOwningMethod(comp);
+    void *cp = (owningMethod && owningMethod->constantPool()) ? owningMethod->constantPool() : comp->getCurrentMethod()->constantPool();
+    *(uintptr_t *)cursor = (uintptr_t)cp;
 
     // J2I relocation information for private nestmate calls
     auto j2iRelocInfo = reinterpret_cast<TR_RelocationRecordInformation *>(
@@ -1190,7 +1192,7 @@ uint8_t *TR::J9S390InterfaceCallDataSnippet::emitSnippetBody()
 
     //  save CPIndex as sign extended 8 byte value on 64bit as it's assumed in J9 helpers
     // cp index
-    *(intptr_t *)cursor = (intptr_t)callNode->getSymbolReference()->getCPIndex();
+    *(intptr_t *)cursor = (intptr_t)callNode->getSymbolReference()->getCPIndexForVM();
     cursor += TR::Compiler->om.sizeofReferenceAddress();
 
     // interface class

@@ -1944,6 +1944,10 @@ ZZ update lastCachedSlot with next empty slot
     CS_GPR  r0,r1,eq_lastCachedSlotField_inInterfaceSnippet(r14)
     JZ      ifCHMUpdateCacheSlot     ZZ Got empty slot so update it
 
+ZZ If r1 is past the last slot, all slots have been taken, just dispatch
+    CL_GPR  r1,eq_lastSlotField_inInterfaceSnippet(r14)
+    JH      ifCHMLcommonJitDispatch
+
 ZZ Someone already grabbed this empty slot
 ZZ Loop till the winner updates the empty slot
 LABEL(ifCHMLoopTillUpdate)
@@ -1970,6 +1974,8 @@ ZZ different than cached one, lets try to grab next free slot
 ZZ before jumping back, r0 should point to the
 ZZ slot we contended for last time
     LR_GPR  r0,r1
+    CL_GPR  r0,eq_lastSlotField_inInterfaceSnippet(r14)
+    JNL     ifCHMLcommonJitDispatch
     J       ifCHMCSLoopBegin
 
 LABEL(ifCHMUpdateCacheSlot)

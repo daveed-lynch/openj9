@@ -50,6 +50,7 @@
 #include "z/codegen/S390StackCheckFailureSnippet.hpp"
 #include "z/codegen/SystemLinkage.hpp"
 #include "z/codegen/SystemLinkagezOS.hpp"
+#include "ras/DebugCounter.hpp"
 #include "ras/Logger.hpp"
 #include "runtime/J9Profiler.hpp"
 #include "runtime/J9ValueProfiler.hpp"
@@ -1528,9 +1529,23 @@ TR::Instruction *generateLastITableAndITableInstructions(TR::CodeGenerator *cg, 
             noLastITableMatchLabel, oolCursor);
         iComment("No Match, jump to next test.", oolCursor)
 
-            /********* Step 2: Dispatch to the method implementation. *********/
-            if (checkITableEntries) oolCursor
-            = generateS390LabelInstruction(cg, TR::InstOpCode::label, callNode, matchLabel, oolCursor);
+        oolCursor = cg->generateDebugCounter(oolCursor,
+            TR::DebugCounter::debugCounterName(comp, "ipic/lastITable/hit"),
+            1, TR::DebugCounter::Cheap);
+
+        TR::LabelSymbol *dispatchLabel = generateLabelSymbol(cg);
+        oolCursor = generateS390BranchInstruction(cg, TR::InstOpCode::BRC, TR::InstOpCode::COND_B, callNode,
+            dispatchLabel, oolCursor);
+
+        /********* Step 2: Dispatch to the method implementation. *********/
+        if (checkITableEntries) {
+            oolCursor = generateS390LabelInstruction(cg, TR::InstOpCode::label, callNode, matchLabel, oolCursor);
+            oolCursor = cg->generateDebugCounter(oolCursor,
+                TR::DebugCounter::debugCounterName(comp, "ipic/iTable/hit"),
+                1, TR::DebugCounter::Cheap);
+        }
+
+        oolCursor = generateS390LabelInstruction(cg, TR::InstOpCode::label, callNode, dispatchLabel, oolCursor);
         // Calculating vTableIndex value. vTableIndexRegister must have the vTableIndex value when dispatching.
         oolCursor = generateRIInstruction(cg, TR::InstOpCode::getLoadHalfWordImmOpCode(), callNode, vTableIndexRegister,
             fej9->getITableEntryJitVTableOffset(), oolCursor);
@@ -2122,6 +2137,10 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
             cursor = generateLastITableAndITableInstructions(cg(), callNode, vftReg, regEP, vTableIndexRegister,
                 methodRegister, postDeps, cursor);
 
+            cursor = cg()->generateDebugCounter(cursor,
+                TR::DebugCounter::debugCounterName(comp(), "ipic/miss"),
+                1, TR::DebugCounter::Cheap);
+
             cursor = new (trHeapMemory())
                 TR::S390RILInstruction(TR::InstOpCode::LARL, callNode, regEP, ifcSnippet, cursor, cg());
 
@@ -2140,6 +2159,7 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
             TR::LabelSymbol *returnLocationLabel = generateLabelSymbol(cg());
             TR::LabelSymbol *cacheFailLabel = generateLabelSymbol(cg());
             TR::Register *regRA = dependencies->searchPostConditionRegister(getReturnAddressRegister());
+            bool countIpicSlotHits = comp()->getOptions()->enableDebugCounters();
             TR::Register *regThis = dependencies->searchPreConditionRegister(TR::RealRegister::GPR1);
             TR::Register *snippetReg = regEP;
 
@@ -2148,9 +2168,9 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
             TR::RegisterDependencyConditions *preDeps = new (trHeapMemory()) TR::RegisterDependencyConditions(
                 dependencies->getPreConditions(), NULL, dependencies->getAddCursorForPre(), 0, cg());
 
-            // Make a copy of input deps, but add on 5 new slots.
+            // Make a copy of input deps, but add on 6 new slots (5 + 1 for the debug counter scratch register).
             TR::RegisterDependencyConditions *postDeps
-                = new (trHeapMemory()) TR::RegisterDependencyConditions(dependencies, 0, 5, cg());
+                = new (trHeapMemory()) TR::RegisterDependencyConditions(dependencies, 0, 6, cg());
             postDeps->setAddCursorForPre(0); // Ignore all pre-deps that were copied.
             postDeps->setNumPreConditions(0, trMemory()); // Ignore all pre-deps that were copied.
 
@@ -2161,6 +2181,14 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
 
             // Add this reg to post deps to ensure no reg motion
             postDeps->addPostConditionIfNotAlreadyInserted(vftReg, TR::RealRegister::AssignAny);
+
+            // Scratch register used by the IPIC slot hit debug counter bump. Declared here so it is in scope for
+            // both dispatch paths and for stopUsingRegister() below.
+            TR::Register *scratch = NULL;
+            if (countIpicSlotHits) {
+                scratch = cg()->allocateRegister();
+                postDeps->addPostCondition(scratch, TR::RealRegister::AssignAny);
+            }
 
             bool useCLFIandBRCL = false;
 
@@ -2192,7 +2220,6 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                         generateS390MemoryReference(snippetReg,
                             ifcSnippet->getDataConstantSnippet()->getSingleDynamicSlotOffset(), cg()),
                         cursor);
-
                 // We need a dummy label to hook dependencies onto
                 cursor = generateS390LabelInstruction(cg(), TR::InstOpCode::label, callNode, paramSetupDummyLabel,
                     preDeps, cursor);
@@ -2202,8 +2229,20 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                     generateS390MemoryReference(regThis, 0, cg()), cursor);
 
                 // Cache hit? then jumpto cached method entrypoint directly
-                cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
-                ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BER);
+                if (countIpicSlotHits) {
+                    // The debug counter bump (AGSI) clobbers the condition code, so it cannot sit between the
+                    // compare and the conditional branch. Skip over the hit path on a mismatch.
+                    TR::LabelSymbol *slotMissLabel = generateLabelSymbol(cg());
+                    cursor = generateS390BranchInstruction(cg(), TR::InstOpCode::BRC, TR::InstOpCode::COND_BNE,
+                        callNode, slotMissLabel, cursor);
+                    cursor = cg()->generateDebugCounter("ipic/slot/hit", *postDeps, 1, TR::DebugCounter::Undetermined, 1, cursor, scratch);
+                    cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
+                    ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BCR);
+                    cursor = generateS390LabelInstruction(cg(), TR::InstOpCode::label, callNode, slotMissLabel, cursor);
+                } else {
+                    cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
+                    ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BER);
+                }
 
                 // Add instructions for LastITable and ITable check.
                 cursor = generateLastITableAndITableInstructions(cg(), callNode, vftReg, snippetReg,
@@ -2294,9 +2333,23 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                                 slotOffset + TR::Compiler->om.sizeofReferenceAddress(), cg()),
                             cursor);
 
-                        cursor
-                            = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
-                        ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BER);
+                        if (countIpicSlotHits) {
+                            // The debug counter bump (AGSI) clobbers the condition code, so it cannot sit between the
+                            // compare and the conditional branch. Skip over the hit path on a mismatch.
+                            TR::LabelSymbol *slotMissLabel = generateLabelSymbol(cg());
+                            cursor = generateS390BranchInstruction(cg(), TR::InstOpCode::BRC,
+                                TR::InstOpCode::COND_BNE, callNode, slotMissLabel, cursor);
+                            cursor = cg()->generateDebugCounter("ipic/slot/hit", *postDeps, 1, TR::DebugCounter::Undetermined, 1, cursor, scratch);
+                            cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister,
+                                cursor);
+                            ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BCR);
+                            cursor = generateS390LabelInstruction(cg(), TR::InstOpCode::label, callNode,
+                                slotMissLabel, cursor);
+                        } else {
+                            cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister,
+                                cursor);
+                            ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BER);
+                        }
 
                         slotOffset += 2 * TR::Compiler->om.sizeofReferenceAddress();
                     }
@@ -2305,6 +2358,10 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                 // Add instructions for LastITable and ITable check.
                 cursor = generateLastITableAndITableInstructions(cg(), callNode, vftReg, regEP, vTableIndexRegister,
                     methodRegister, postDeps, cursor);
+
+                cursor = cg()->generateDebugCounter(cursor,
+                    TR::DebugCounter::debugCounterName(comp(), "ipic/miss"),
+                    1, TR::DebugCounter::Cheap);
 
                 cursor = new (trHeapMemory())
                     TR::S390RILInstruction(TR::InstOpCode::LARL, callNode, snippetReg, ifcSnippet, cursor, cg());
@@ -2329,6 +2386,8 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
             } else if (methodRegister != NULL) {
                 cg()->stopUsingRegister(methodRegister);
             }
+            if (scratch != NULL)
+                cg()->stopUsingRegister(scratch);
         }
     } else if (methodSymbol->isComputed()) {
         TR::Register *targetAddress = cg()->evaluate(callNode->getFirstChild());
