@@ -2315,7 +2315,7 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
 
                         // Slot hit?
                         cursor = cg()->generateDebugCounter(cursor,
-                            TR::DebugCounter::debugCounterName(comp(), "ipic/slot/hit", i),
+                            TR::DebugCounter::debugCounterName(comp(), "ipic/slot/hit"),
                             1, TR::DebugCounter::Cheap);
 
                         cursor
@@ -2325,7 +2325,7 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                         slotOffset += 2 * TR::Compiler->om.sizeofReferenceAddress();
                         // decrement if we go through the loop again
                         cursor = cg()->generateDebugCounter(cursor,
-                            TR::DebugCounter::debugCounterName(comp(), "ipic/slot/hit", i),
+                            TR::DebugCounter::debugCounterName(comp(), "ipic/slot/hit"),
                             -1, TR::DebugCounter::Cheap);
                     }
                 }
