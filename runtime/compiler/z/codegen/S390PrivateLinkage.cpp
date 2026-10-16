@@ -2318,35 +2318,29 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                         if (comp()->target().is64Bit() && TR::Compiler->om.generateCompressedObjectHeaders())
                             cmpOp = TR::InstOpCode::CL;
 
-                        // Load method pointer into methodRegister on every iteration so
-                        // generateLastITableAndITableInstructions gets the last slot's method pointer
+                        // check if cached class matches the receiving object class
+                        cursor = generateRXInstruction(cg(), cmpOp, callNode, vftReg,
+                            generateS390MemoryReference(snippetReg, slotOffset, cg()), cursor);
+
                         cursor = generateRXInstruction(cg(), TR::InstOpCode::getLoadOpCode(), callNode, methodRegister,
                             generateS390MemoryReference(snippetReg,
                                 slotOffset + TR::Compiler->om.sizeofReferenceAddress(), cg()),
                             cursor);
 
-                        // check if cached class matches the receiving object class
-                        cursor = generateRXInstruction(cg(), cmpOp, callNode, vftReg,
-                            generateS390MemoryReference(snippetReg, slotOffset, cg()), cursor);
-
-                        TR::LabelSymbol *nextSlotLabel = generateLabelSymbol(cg());
-
-                        // If not matching, jump to next slot
-                        cursor = generateS390BranchInstruction(cg(), TR::InstOpCode::BRC,
-                            TR::InstOpCode::COND_BNE, callNode, nextSlotLabel, cursor);
-
-                        // Slot hit
+                        // Slot hit?
                         cursor = cg()->generateDebugCounter(cursor,
                             TR::DebugCounter::debugCounterName(comp(), "ipic/slot/hit", i),
                             1, TR::DebugCounter::Cheap);
 
                         cursor
                             = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
-                        ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BCR);
-
-                        cursor = generateS390LabelInstruction(cg(), TR::InstOpCode::label, callNode, nextSlotLabel, cursor);
+                        ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BER);
 
                         slotOffset += 2 * TR::Compiler->om.sizeofReferenceAddress();
+                        // decrement if we go through the loop again
+                        cursor = cg()->generateDebugCounter(cursor,
+                            TR::DebugCounter::debugCounterName(comp(), "ipic/slot/hit", i),
+                            -1, TR::DebugCounter::Cheap);
                     }
                 }
 
