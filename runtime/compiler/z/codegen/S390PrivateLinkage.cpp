@@ -2316,7 +2316,7 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                         // Slot hit?
                         cursor = cg()->generateDebugCounter(cursor,
                             TR::DebugCounter::debugCounterName(comp(), "ipic/slot/hit"),
-                            1, TR::DebugCounter::Cheap);
+                            1, TR::DebugCounter::Exorbitant);
 
                         cursor
                             = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
@@ -2326,7 +2326,7 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                         // decrement if we go through the loop again
                         cursor = cg()->generateDebugCounter(cursor,
                             TR::DebugCounter::debugCounterName(comp(), "ipic/slot/hit"),
-                            -1, TR::DebugCounter::Cheap);
+                            -1, TR::DebugCounter::Exorbitant);
                     }
                 }
 
