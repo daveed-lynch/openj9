@@ -2226,7 +2226,7 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
 
                 // Cache hit? then bump counter and jumpto cached method entrypoint directly
                 cursor = cg()->generateDebugCounter(cursor,
-                    TR::DebugCounter::debugCounterName(comp(), "ipic/slot0/hit"),
+                    TR::DebugCounter::debugCounterName(comp(), "ipic/slot/hit"),
                     1, TR::DebugCounter::Cheap);
 
                 cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
@@ -2337,7 +2337,7 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
 
                         // Slot hit
                         cursor = cg()->generateDebugCounter(cursor,
-                            TR::DebugCounter::debugCounterName(comp(), "ipic/slot%d/hit", i),
+                            TR::DebugCounter::debugCounterName(comp(), "ipic/slot/hit", i),
                             1, TR::DebugCounter::Cheap);
 
                         cursor
