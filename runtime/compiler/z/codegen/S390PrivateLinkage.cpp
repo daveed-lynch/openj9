@@ -2220,19 +2220,13 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                 cursor = generateRXInstruction(cg(), TR::InstOpCode::getCmpLogicalOpCode(), callNode, classRegister,
                     generateS390MemoryReference(regThis, 0, cg()), cursor);
 
-                TR::LabelSymbol *singleSlotMissLabel = generateLabelSymbol(cg());
-                cursor = generateS390BranchInstruction(cg(), TR::InstOpCode::BRC,
-                    TR::InstOpCode::COND_BNE, callNode, singleSlotMissLabel, cursor);
-
                 // Cache hit? then bump counter and jumpto cached method entrypoint directly
                 cursor = cg()->generateDebugCounter(cursor,
                     TR::DebugCounter::debugCounterName(comp(), "ipic/slot/hit"),
                     1, TR::DebugCounter::Cheap);
 
                 cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
-                ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BCR);
-
-                cursor = generateS390LabelInstruction(cg(), TR::InstOpCode::label, callNode, singleSlotMissLabel, cursor);
+                ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BER);
 
                 // Add instructions for LastITable and ITable check.
                 cursor = generateLastITableAndITableInstructions(cg(), callNode, vftReg, snippetReg,
