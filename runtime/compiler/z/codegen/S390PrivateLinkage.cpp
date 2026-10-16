@@ -2318,6 +2318,13 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                         if (comp()->target().is64Bit() && TR::Compiler->om.generateCompressedObjectHeaders())
                             cmpOp = TR::InstOpCode::CL;
 
+                        // Load method pointer into methodRegister on every iteration so
+                        // generateLastITableAndITableInstructions gets the last slot's method pointer
+                        cursor = generateRXInstruction(cg(), TR::InstOpCode::getLoadOpCode(), callNode, methodRegister,
+                            generateS390MemoryReference(snippetReg,
+                                slotOffset + TR::Compiler->om.sizeofReferenceAddress(), cg()),
+                            cursor);
+
                         // check if cached class matches the receiving object class
                         cursor = generateRXInstruction(cg(), cmpOp, callNode, vftReg,
                             generateS390MemoryReference(snippetReg, slotOffset, cg()), cursor);
@@ -2332,11 +2339,6 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                         cursor = cg()->generateDebugCounter(cursor,
                             TR::DebugCounter::debugCounterName(comp(), "ipic/slot%d/hit", i),
                             1, TR::DebugCounter::Cheap);
-
-                        cursor = generateRXInstruction(cg(), TR::InstOpCode::getLoadOpCode(), callNode, methodRegister,
-                            generateS390MemoryReference(snippetReg,
-                                slotOffset + TR::Compiler->om.sizeofReferenceAddress(), cg()),
-                            cursor);
 
                         cursor
                             = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
