@@ -2168,9 +2168,9 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
             TR::RegisterDependencyConditions *preDeps = new (trHeapMemory()) TR::RegisterDependencyConditions(
                 dependencies->getPreConditions(), NULL, dependencies->getAddCursorForPre(), 0, cg());
 
-            // Make a copy of input deps, but add on 5 new slots.
+            // Make a copy of input deps, but add on 6 new slots (5 + 1 for the debug counter scratch register).
             TR::RegisterDependencyConditions *postDeps
-                = new (trHeapMemory()) TR::RegisterDependencyConditions(dependencies, 0, 5, cg());
+                = new (trHeapMemory()) TR::RegisterDependencyConditions(dependencies, 0, 6, cg());
             postDeps->setAddCursorForPre(0); // Ignore all pre-deps that were copied.
             postDeps->setNumPreConditions(0, trMemory()); // Ignore all pre-deps that were copied.
 
@@ -2181,6 +2181,14 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
 
             // Add this reg to post deps to ensure no reg motion
             postDeps->addPostConditionIfNotAlreadyInserted(vftReg, TR::RealRegister::AssignAny);
+
+            // Scratch register used by the IPIC slot hit debug counter bump. Declared here so it is in scope for
+            // both dispatch paths and for stopUsingRegister() below.
+            TR::Register *scratch = NULL;
+            if (countIpicSlotHits) {
+                scratch = cg()->allocateRegister();
+                postDeps->addPostCondition(scratch, TR::RealRegister::AssignAny);
+            }
 
             bool useCLFIandBRCL = false;
 
@@ -2212,9 +2220,6 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                         generateS390MemoryReference(snippetReg,
                             ifcSnippet->getDataConstantSnippet()->getSingleDynamicSlotOffset(), cg()),
                         cursor);
-TR::Register *scratch = cg()->allocateRegister();
-postDeps->addPostCondition(scratch, TR::RealRegister::AssignAny);
-
                 // We need a dummy label to hook dependencies onto
                 cursor = generateS390LabelInstruction(cg(), TR::InstOpCode::label, callNode, paramSetupDummyLabel,
                     preDeps, cursor);
@@ -2328,9 +2333,6 @@ postDeps->addPostCondition(scratch, TR::RealRegister::AssignAny);
                                 slotOffset + TR::Compiler->om.sizeofReferenceAddress(), cg()),
                             cursor);
 
-TR::Register *scratch = cg()->allocateRegister();
-postDeps->addPostCondition(scratch, TR::RealRegister::AssignAny);
-
                         if (countIpicSlotHits) {
                             // The debug counter bump (AGSI) clobbers the condition code, so it cannot sit between the
                             // compare and the conditional branch. Skip over the hit path on a mismatch.
@@ -2384,7 +2386,8 @@ postDeps->addPostCondition(scratch, TR::RealRegister::AssignAny);
             } else if (methodRegister != NULL) {
                 cg()->stopUsingRegister(methodRegister);
             }
-            cg()->stopUsingRegister(scratch);
+            if (scratch != NULL)
+                cg()->stopUsingRegister(scratch);
         }
     } else if (methodSymbol->isComputed()) {
         TR::Register *targetAddress = cg()->evaluate(callNode->getFirstChild());
