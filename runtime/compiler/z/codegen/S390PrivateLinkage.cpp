@@ -2212,6 +2212,8 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                         generateS390MemoryReference(snippetReg,
                             ifcSnippet->getDataConstantSnippet()->getSingleDynamicSlotOffset(), cg()),
                         cursor);
+TR::Register *scratch = cg()->allocateRegister();
+postDeps->addPostCondition(scratch, TR::RealRegister::AssignAny);
 
                 // We need a dummy label to hook dependencies onto
                 cursor = generateS390LabelInstruction(cg(), TR::InstOpCode::label, callNode, paramSetupDummyLabel,
@@ -2229,7 +2231,7 @@ void J9::Z::PrivateLinkage::buildVirtualDispatch(TR::Node *callNode, TR::Registe
                     cursor = generateS390BranchInstruction(cg(), TR::InstOpCode::BRC, TR::InstOpCode::COND_BNE,
                         callNode, slotMissLabel, cursor);
                     cursor = cg()->generateDebugCounter(cursor, "ipic/slot/hit", 1, TR::DebugCounter::Undetermined);
-                    cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
+                    cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor, scratch);
                     ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BCR);
                     cursor = generateS390LabelInstruction(cg(), TR::InstOpCode::label, callNode, slotMissLabel, cursor);
                 } else {
