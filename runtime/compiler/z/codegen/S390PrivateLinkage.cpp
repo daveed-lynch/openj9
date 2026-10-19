@@ -2328,14 +2328,16 @@ postDeps->addPostCondition(scratch, TR::RealRegister::AssignAny);
                                 slotOffset + TR::Compiler->om.sizeofReferenceAddress(), cg()),
                             cursor);
 
+TR::Register *scratch = cg()->allocateRegister();
+postDeps->addPostCondition(scratch, TR::RealRegister::AssignAny);
+
                         if (countIpicSlotHits) {
                             // The debug counter bump (AGSI) clobbers the condition code, so it cannot sit between the
                             // compare and the conditional branch. Skip over the hit path on a mismatch.
                             TR::LabelSymbol *slotMissLabel = generateLabelSymbol(cg());
                             cursor = generateS390BranchInstruction(cg(), TR::InstOpCode::BRC,
                                 TR::InstOpCode::COND_BNE, callNode, slotMissLabel, cursor);
-                            cursor = cg()->generateDebugCounter(cursor, "ipic/slot/hit", 1,
-                                TR::DebugCounter::Undetermined);
+                            cursor = cg()->generateDebugCounter("ipic/slot/hit", *postDeps, 1, TR::DebugCounter::Undetermined, 1, cursor, scratch);
                             cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister,
                                 cursor);
                             ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BCR);
