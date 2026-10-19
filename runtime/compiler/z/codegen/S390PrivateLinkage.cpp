@@ -2384,6 +2384,7 @@ postDeps->addPostCondition(scratch, TR::RealRegister::AssignAny);
             } else if (methodRegister != NULL) {
                 cg()->stopUsingRegister(methodRegister);
             }
+            cg()->stopUsingRegister(scratch);
         }
     } else if (methodSymbol->isComputed()) {
         TR::Register *targetAddress = cg()->evaluate(callNode->getFirstChild());
