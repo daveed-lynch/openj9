@@ -2230,7 +2230,7 @@ postDeps->addPostCondition(scratch, TR::RealRegister::AssignAny);
                     TR::LabelSymbol *slotMissLabel = generateLabelSymbol(cg());
                     cursor = generateS390BranchInstruction(cg(), TR::InstOpCode::BRC, TR::InstOpCode::COND_BNE,
                         callNode, slotMissLabel, cursor);
-                    cursor = cg()->generateDebugCounter(cursor, "ipic/slot/hit", 1, TR::DebugCounter::Undetermined, cursor, 1, scratch);
+                    cursor = cg()->generateDebugCounter(cursor, "ipic/slot/hit", 1, TR::DebugCounter::Undetermined, 1, cursor, scratch);
                     cursor = generateS390RegInstruction(cg(), TR::InstOpCode::BCR, callNode, methodRegister, cursor);
                     ((TR::S390RegInstruction *)cursor)->setBranchCondition(TR::InstOpCode::COND_BCR);
                     cursor = generateS390LabelInstruction(cg(), TR::InstOpCode::label, callNode, slotMissLabel, cursor);
