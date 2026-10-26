@@ -1116,13 +1116,16 @@ FUNC_LABEL(_interfaceSlotsUnavailable):
 	cmp	x11, x13
 #ifndef NO_ITABLEWALK_CHECK
 	beq	L_hitITable
-	// Before going to the VM helper, we will saturate iTable walking here
+	// Before going to the VM helper, walk up to 4 iTable entries
 	ldr	x12, [x14, #J9TR_J9Class_iTable]		// Load the iTable pointer
+	mov	x9, #4						// iteration limit
 L_iTableLoop:
 	cbz	x12, L_callHelper				// check iTable != null
 	ldr	x13, [x12, #J9TR_J9ITable_interfaceClass]	// Load iTable class
 	cmp	x11, x13
 	beq	L_hitITable
+	subs	x9, x9, #1					// decrement counter, set flags
+	beq	L_callHelper					// limit reached, fall back to helper
 	ldr	x12, [x12, #J9TR_J9ITable_next]		// Load the next iTable pointer
 	b	L_iTableLoop
 #else /* ~NO_ITABLEWALK_CHECK */
