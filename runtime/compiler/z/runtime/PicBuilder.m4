@@ -1843,14 +1843,34 @@ ifdef({NO_ITABLEWALK_CHECK},{dnl
     JZ      ifCHMLhitITable
 ZZ Before going to the VM helper, we will saturate iTable walking
     L_GPR   r2,J9TR_J9Class_iTable(r1)          # Load the iTable pointer
-LABEL(ifCHMLiTableLoop)
+ZZ Check first iTable entry
     CHI_GPR r2,0                                # check iTable != null
     JZ      ifCHMLcallHelper
     L_GPR   r3,J9TR_J9ITable_interfaceClass(r2) # Load iTable class
     CR_GPR  rEP,r3
     JZ      ifCHMLhitITable
     L_GPR   r2,J9TR_J9ITable_next(r2)           # Load the next iTable pointer
-    J       ifCHMLiTableLoop
+ZZ Check second iTable entry
+    CHI_GPR r2,0                                # check iTable != null
+    JZ      ifCHMLcallHelper
+    L_GPR   r3,J9TR_J9ITable_interfaceClass(r2) # Load iTable class
+    CR_GPR  rEP,r3
+    JZ      ifCHMLhitITable
+    L_GPR   r2,J9TR_J9ITable_next(r2)           # Load the next iTable pointer
+ZZ Check third iTable entry
+    CHI_GPR r2,0                                # check iTable != null
+    JZ      ifCHMLcallHelper
+    L_GPR   r3,J9TR_J9ITable_interfaceClass(r2) # Load iTable class
+    CR_GPR  rEP,r3
+    JZ      ifCHMLhitITable
+    L_GPR   r2,J9TR_J9ITable_next(r2)           # Load the next iTable pointer
+ZZ Check fourth iTable entry
+    CHI_GPR r2,0                                # check iTable != null
+    JZ      ifCHMLcallHelper
+    L_GPR   r3,J9TR_J9ITable_interfaceClass(r2) # Load iTable class
+    CR_GPR  rEP,r3
+    JZ      ifCHMLhitITable
+    J       ifCHMLcallHelper
 })dnl
 ZZ ITable entry is a match
 LABEL(ifCHMLhitITable)
