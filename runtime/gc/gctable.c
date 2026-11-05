@@ -62,6 +62,7 @@ J9MemoryManagerFunctions MemoryManagerFunctions = {
 #if defined(J9VM_GC_FINALIZATION)
 	j9gc_finalizer_startup,
 	j9gc_finalizer_shutdown,
+	j9gc_gcThreads_shutdown,
 	j9gc_wait_for_reference_processing,
 	runFinalization,
 #endif /* J9VM_GC_FINALIZATION */
@@ -118,6 +119,11 @@ J9MemoryManagerFunctions MemoryManagerFunctions = {
 	j9gc_get_softmx,
 	j9gc_get_initial_heap_size,
 	j9gc_get_maximum_heap_size,
+	j9gc_get_max_tenuring_threshold,
+	j9gc_get_initial_tenuring_threshold,
+	j9gc_get_tlh_minimum_size,
+	j9gc_get_tlh_refill_waste_limit,
+	j9gc_is_tlab_enabled,
 	j9gc_get_minimum_young_generation_size,
 	j9gc_get_maximum_young_generation_size,
 	j9gc_objaccess_checkClassLive,
@@ -249,6 +255,8 @@ J9MemoryManagerFunctions MemoryManagerFunctions = {
 	j9gc_arraylet_getLeafLogSize,
 	j9gc_get_offheap_data,
 	j9gc_set_allocation_sampling_interval,
+	j9gc_set_internal_allocation_sampling_interval,
+	j9gc_get_internal_allocation_sampling_interval,
 	j9gc_set_allocation_threshold,
 	j9gc_objaccess_recentlyAllocatedObject,
 	j9gc_objaccess_postStoreClassToClassLoader,

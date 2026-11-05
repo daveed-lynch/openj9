@@ -1,6 +1,5 @@
-/*[INCLUDE-IF Sidecar18-SE]*/
 /*
- * Copyright IBM Corp. and others 2004
+ * Copyright IBM Corp. and others 2026
  *
  * This program and the accompanying materials are made available under
  * the terms of the Eclipse Public License 2.0 which accompanies this
@@ -18,25 +17,21 @@
  * [1] https://www.gnu.org/software/classpath/license.html
  * [2] https://openjdk.org/legal/assembly-exception.html
  *
- * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0 OR GPL-2.0-only WITH OpenJDK-assembly-exception-1.0
+ * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0 OR GPL-2.0-only WITH OpenJDK-assem bly-exception-1.0
  */
-package com.ibm.jvm.j9.dump.indexsupport;
+package org.openj9.test;
 
-import org.xml.sax.Attributes;
+import java.util.EnumSet;
+enum Day {
+	MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY
+}
 
-/**
- * @author jmdisher
- *
- */
-public class NodeUnexpectedTag extends NodeAbstract
-{
-	private NodeUnexpectedTag(String qName, Attributes attributes)
-	{
-		// System.err.println("Error:  Unexpected tag with name \"" + qName + "\"");
-	}
+class HelloWorld {
+	static EnumSet<Day> weekend = EnumSet.of(Day.SATURDAY, Day.SUNDAY);
+	String say = new String("Hello World");
 
-	public static IParserNode unexpectedTag(String name, Attributes attributes)
-	{
-		return new NodeUnexpectedTag(name, attributes);
+	public static void main(String[] args) {
+		HelloWorld hi = new HelloWorld();
+		System.out.println(hi.say + weekend);
 	}
 }

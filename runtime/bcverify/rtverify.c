@@ -244,31 +244,52 @@ findAndMatchStack (J9BytecodeVerificationData *verifyData, IDATA targetPC, IDATA
 #if defined(J9VM_OPT_VALHALLA_STRICT_FIELDS)
 		if (J9_CLASSFILE_OR_ROMCLASS_SUPPORTS_STRICT_FIELDS(verifyData->romClass)
 			&& liveStack->uninitializedThis
-			&& (hashTableGetCount(verifyData->strictFields) > 0)
+			&& ((hashTableGetCount(verifyData->strictFields) > 0) || (hashTableGetCount(verifyData->earlyLarvalFrames) > 0))
 		) {
-			/* If there is no early larval frame for this pc the unset fields
-			 * are inferred from the previous frame.
-			 */
-			J9EarlyLarvalFrame *earlyLarvalFrame = verifyData->earlyLarvalFramePrevious;
+			J9EarlyLarvalFrame *earlyLarvalFrame = NULL;
+			BOOLEAN allFieldsUnset = TRUE;
+
 			if (hashTableGetCount(verifyData->earlyLarvalFrames) > 0) {
 				J9EarlyLarvalFrame query = {0};
 				query.baseFramePC = targetPC;
-				J9EarlyLarvalFrame *earlyLarvalFrameTemp = hashTableFind(verifyData->earlyLarvalFrames, &query);
-				if (NULL != earlyLarvalFrameTemp) {
-					earlyLarvalFrame = earlyLarvalFrameTemp;
-					verifyData->earlyLarvalFramePrevious = earlyLarvalFrame;
+				earlyLarvalFrame = hashTableFind(verifyData->earlyLarvalFrames, &query);
+				if (NULL != earlyLarvalFrame) {
+					allFieldsUnset = FALSE;
+				} else if (targetStack->uninitializedThis) {
+					/* When a restricted (uninitializedThis is true) frame has no
+					 * explicit early_larval wrapper the unset fields are inferred as:
+					 * - if the previous frame was restricted, the unset fields are
+					 * the same as the unset fields of the previous frame
+					 * - otherwise the list of unset fields is empty
+					 */
+					UDATA previousIndex = stackIndex;
+
+					for (; previousIndex > 0; previousIndex--) {
+						J9BranchTargetStack *previousStack = BCV_INDEX_STACK(previousIndex - 1);
+						if (!previousStack->uninitializedThis) {
+							/* Predecessor is not restricted: inferred unset field list is empty (all fields set). */
+							allFieldsUnset = FALSE;
+							break;
+						}
+						J9EarlyLarvalFrame previousQuery = {0};
+						previousQuery.baseFramePC = previousStack->pc;
+						earlyLarvalFrame = hashTableFind(verifyData->earlyLarvalFrames, &previousQuery);
+						if (NULL != earlyLarvalFrame) {
+							allFieldsUnset = FALSE;
+							break;
+						}
+					}
 				}
 			}
 
 			if (NULL != earlyLarvalFrame) {
 				U_16 unsetFieldIndex = 0;
-				J9StrictFieldEntry *entry = NULL;
 				/* Mark each strict field that is in the target frame unset field list as referenced. */
 				for (; unsetFieldIndex < earlyLarvalFrame->numberOfUnsetFields; unsetFieldIndex++) {
 					J9ROMNameAndSignature *nas = earlyLarvalFrame->unsetFieldNASList[unsetFieldIndex];
 					J9StrictFieldEntry query = {0};
 					query.nas = nas;
-					entry = hashTableFind(verifyData->strictFields, &query);
+					J9StrictFieldEntry *entry = hashTableFind(verifyData->strictFields, &query);
 					if (NULL == entry) {
 						verifyData->errorDetailCode = BCV_ERR_STRICT_FIELD_NOT_VALID;
 						rc = BCV_FAIL;
@@ -289,10 +310,7 @@ findAndMatchStack (J9BytecodeVerificationData *verifyData, IDATA targetPC, IDATA
 			J9HashTableState hashTableState = {0};
 			J9StrictFieldEntry *entry = (J9StrictFieldEntry *)hashTableStartDo(verifyData->strictFields, &hashTableState);
 			while (NULL != entry) {
-				/* The implicit first frame of a strict instance initialization
-				 * method (NULL == earlyLarvalFrame) treats all strict fields as unset.
-				 */
-				if ((NULL == earlyLarvalFrame) || entry->isReferenced) {
+				if (allFieldsUnset || entry->isReferenced) {
 					if (entry->isSet) {
 						entry->isSet = FALSE;
 						verifyData->strictFieldsUnsetCount++;
@@ -1508,13 +1526,6 @@ _illegalPrimitiveReturn:
 			if (BCV_ERR_INSUFFICIENT_MEMORY == reasonCode) {
 				goto _outOfMemoryError;
 			}
-#if defined(J9VM_OPT_VALHALLA_STRICT_FIELDS)
-			if (BCV_ERR_INVALID_USE_STRICT_INSTANCE_FIELDS == reasonCode) {
-				errorType = J9NLS_BCV_ERR_UNKNOWN_STRICT_FIELD__ID;
-				verboseErrorCode = BCV_ERR_INVALID_USE_STRICT_INSTANCE_FIELDS;
-				goto _miscError;
-			}
-#endif /* defined(J9VM_OPT_VALHALLA_STRICT_FIELDS) */
 			inconsistentStack |= (FALSE == rc);
 			if (inconsistentStack) {
 				constantPool = (J9ROMConstantPoolItem *) (romClass + 1);

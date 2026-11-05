@@ -3185,6 +3185,8 @@ done:
 			) {
 				modifiers |= J9AccClassHasIdentity;
 			}
+		} else {
+			modifiers &= ~J9AccClassHasIdentity;
 		}
 #endif /* defined(J9VM_OPT_VALHALLA_VALUE_TYPES) */
 		returnSingleFromINL(REGISTER_ARGS, modifiers, 1);
@@ -4562,6 +4564,43 @@ done:
 		return rc;
 	}
 
+	/* jdk.internal.misc.Unsafe: public native boolean isFlatPayloadBinary(Class<?> valueType); */
+	VMINLINE VM_BytecodeAction
+	inlUnsafeIsFlatPayloadBinary(REGISTER_ARGS_LIST)
+	{
+		j9object_t cls = *(j9object_t *)_sp;
+		I_32 result = (I_32)TRUE;
+		if (NULL != cls) {
+			J9Class *clazz = J9VM_J9CLASS_FROM_HEAPCLASS(_currentThread, cls);
+#if defined(J9VM_OPT_VALHALLA_FLATTENABLE_VALUE_TYPES)
+			if (J9CLASS_HAS_REFERENCES(clazz)) {
+				result = (I_32)FALSE;
+			}
+#else /* defined(J9VM_OPT_VALHALLA_FLATTENABLE_VALUE_TYPES) */
+			if (J9ROMCLASS_IS_PRIMITIVE_TYPE(clazz->romClass)) {
+				/* result = (I_32)TRUE; */
+			} else if (J9_IS_J9CLASS_VALUETYPE(clazz)) {
+				J9ROMFieldWalkState fieldWalkState;
+				J9ROMFieldShape *field = romFieldsStartDo(clazz->romClass, &fieldWalkState);
+				while (NULL != field) {
+					if (J9_ARE_NO_BITS_SET(field->modifiers, J9AccStatic)) {
+						J9UTF8 *sig = J9ROMFIELDSHAPE_SIGNATURE(field);
+						U_8 firstChar = J9UTF8_DATA(sig)[0];
+						if (('L' == firstChar) || ('[' == firstChar)) {
+							result = (I_32)FALSE;
+							break;
+						}
+					}
+					field = romFieldsNextDo(&fieldWalkState);
+				}
+			}
+#endif /* defined(J9VM_OPT_VALHALLA_FLATTENABLE_VALUE_TYPES) */
+		}
+
+		returnSingleFromINL(REGISTER_ARGS, result, 2);
+		return EXECUTE_BYTECODE;
+	}
+
 #endif /* defined(J9VM_OPT_VALHALLA_VALUE_TYPES) */
 #if defined(J9VM_OPT_VALHALLA_FLATTENABLE_VALUE_TYPES)
 	/* jdk.internal.misc.Unsafe: public native <V> V getFlatValue(Object obj, long offset, int layoutKind, Class<?> clz); */
@@ -4698,24 +4737,6 @@ done:
 		}
 
 		returnSingleFromINL(REGISTER_ARGS, isFlattened, 4);
-		return EXECUTE_BYTECODE;
-	}
-
-	/* jdk.internal.misc.Unsafe: public native boolean isFlatPayloadBinary(Class<?> valueType); */
-	VMINLINE VM_BytecodeAction
-	inlUnsafeIsFlatPayloadBinary(REGISTER_ARGS_LIST)
-	{
-		j9object_t cls = *(j9object_t*)_sp;
-
-		I_32 result = (I_32)FALSE;
-		if (NULL != cls) {
-			J9Class *clazz = J9VM_J9CLASS_FROM_HEAPCLASS(_currentThread, cls);
-			if (!J9CLASS_HAS_REFERENCES(clazz)) {
-				result = (I_32)TRUE;
-			}
-		}
-
-		returnSingleFromINL(REGISTER_ARGS, result, 2);
 		return EXECUTE_BYTECODE;
 	}
 
@@ -7335,11 +7356,18 @@ done:
 #if defined(J9VM_OPT_VALHALLA_FLATTENABLE_VALUE_TYPES)
 					J9ArrayClass *arrayClass = (J9ArrayClass *)J9OBJECT_CLAZZ(_currentThread, arrayref);
 					if ((NULL == value) && J9_IS_J9ARRAYCLASS_NULL_RESTRICTED(arrayClass)) {
-						rc = THROW_NPE;
-						return rc;
-					}
+						updateVMStruct(REGISTER_ARGS);
+						prepareForExceptionThrow(_currentThread);
+						setCurrentExceptionNLS(
+							_currentThread, J9VMCONSTANTPOOL_JAVALANGARRAYSTOREEXCEPTION,
+							J9NLS_VM_CANNOT_STORE_NULL_IN_NULL_RESTRICTED_ARRAY);
+						VMStructHasBeenUpdated(REGISTER_ARGS);
+						rc = GOTO_THROW_CURRENT_EXCEPTION;
+					} else
 #endif /* J9VM_OPT_VALHALLA_FLATTENABLE_VALUE_TYPES */
-					rc = THROW_ARRAY_STORE;
+					{
+						rc = THROW_ARRAY_STORE;
+					}
 				} else {
 					VM_ValueTypeHelpers::storeFlattenableArrayElement(_currentThread, _objectAccessBarrier, arrayref, index, value);
 					_pc += 1;
@@ -7622,7 +7650,6 @@ done:
 	VMINLINE VM_BytecodeAction
 	ldc(REGISTER_ARGS_LIST, UDATA parmSize)
 	{
-retry:
 		VM_BytecodeAction rc = EXECUTE_BYTECODE;
 		U_16 index = 0;
 		if (1 == parmSize) {
@@ -7672,12 +7699,10 @@ retry:
 			restoreGenericSpecialStackFrame(REGISTER_ARGS);
 			if (immediateAsyncPending()) {
 				rc = GOTO_ASYNC_CHECK;
-				goto done;
 			} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 				rc = GOTO_THROW_CURRENT_EXCEPTION;
-				goto done;
 			}
-			goto retry;
+			goto done;
 		}
 resolved:
 		_pc += (1 + parmSize);
@@ -7730,7 +7755,6 @@ done:
 	VMINLINE VM_BytecodeAction
 	getstatic(REGISTER_ARGS_LIST)
 	{
-retry:
 		VM_BytecodeAction rc = EXECUTE_BYTECODE;
 		U_16 index = *(U_16*)(_pc + 1);
 		J9ConstantPool *ramConstantPool = J9_CP_FROM_METHOD(_literals);
@@ -7755,7 +7779,7 @@ retry:
 				goto done;
 			}
 			if ((void*)-1 != resolveResult) {
-				goto retry;
+				goto done;
 			}
 			ramStaticFieldRef = (J9RAMStaticFieldRef*)&_currentThread->floatTemp1;
 			valueOffset = ramStaticFieldRef->valueOffset;
@@ -7901,11 +7925,20 @@ done:
 #endif
 		{
 #if defined(J9VM_OPT_VALHALLA_FLATTENABLE_VALUE_TYPES)
-			/* NullRestricted field cannot be set to null. */
+			/* Null-restricted static field cannot be set to null. */
 			if (J9_ARE_ALL_BITS_SET(classAndFlags, J9StaticFieldRefNullRestricted)) {
 				j9object_t valueref = *(j9object_t*)_sp;
 				if (NULL == valueref) {
-					rc = THROW_NPE;
+					J9ROMFieldRef *romFieldRef = (J9ROMFieldRef *)(J9_ROM_CP_FROM_ROM_CLASS(ramConstantPool->ramClass->romClass) + index);
+					J9UTF8 *fieldName = J9ROMNAMEANDSIGNATURE_NAME(J9ROMFIELDREF_NAMEANDSIGNATURE(romFieldRef));
+					updateVMStruct(REGISTER_ARGS);
+					prepareForExceptionThrow(_currentThread);
+					setCurrentExceptionNLSWithArgs(
+						_currentThread, J9NLS_VM_CANNOT_STORE_NULL_IN_NULL_RESTRICTED_FIELD,
+						J9VMCONSTANTPOOL_JAVALANGNULLPOINTEREXCEPTION,
+						J9UTF8_LENGTH(fieldName), J9UTF8_DATA(fieldName));
+					VMStructHasBeenUpdated(REGISTER_ARGS);
+					rc = GOTO_THROW_CURRENT_EXCEPTION;
 					goto done;
 				}
 			}
@@ -7951,7 +7984,6 @@ done:
 	VMINLINE VM_BytecodeAction
 	getfieldLogic(REGISTER_ARGS_LIST, UDATA indexOffset, j9object_t *objectLocation, UDATA slotsToPop)
 	{
-retry:
 		VM_BytecodeAction rc = EXECUTE_BYTECODE;
 		U_16 index = *(U_16*)(_pc + indexOffset);
 		J9ConstantPool *ramConstantPool = J9_CP_FROM_METHOD(_literals);
@@ -7968,12 +8000,10 @@ retry:
 			restoreGenericSpecialStackFrame(REGISTER_ARGS);
 			if (immediateAsyncPending()) {
 				rc = GOTO_ASYNC_CHECK;
-				goto done;
 			} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 				rc = GOTO_THROW_CURRENT_EXCEPTION;
-				goto done;
 			}
-			goto retry;
+			goto done;
 		}
 		{
 			j9object_t objectref = *objectLocation;
@@ -8139,7 +8169,17 @@ done:
 					if (J9_ARE_ALL_BITS_SET(flags, J9FieldFlagIsNullRestricted)) {
 						j9object_t valueref = *(j9object_t*)_sp;
 						if (NULL == valueref) {
-							rc = THROW_NPE;
+							/* Receiver is non-null; NPE is due to storing null into a null-restricted field. */
+							J9ROMFieldRef *romFieldRef = (J9ROMFieldRef *)(J9_ROM_CP_FROM_ROM_CLASS(ramConstantPool->ramClass->romClass) + index);
+							J9UTF8 *fieldName = J9ROMNAMEANDSIGNATURE_NAME(J9ROMFIELDREF_NAMEANDSIGNATURE(romFieldRef));
+							updateVMStruct(REGISTER_ARGS);
+							prepareForExceptionThrow(_currentThread);
+							setCurrentExceptionNLSWithArgs(
+								_currentThread, J9NLS_VM_CANNOT_STORE_NULL_IN_NULL_RESTRICTED_FIELD,
+								J9VMCONSTANTPOOL_JAVALANGNULLPOINTEREXCEPTION,
+								J9UTF8_LENGTH(fieldName), J9UTF8_DATA(fieldName));
+							VMStructHasBeenUpdated(REGISTER_ARGS);
+							rc = GOTO_THROW_CURRENT_EXCEPTION;
 							goto done;
 						}
 					}
@@ -8343,7 +8383,6 @@ done:
 	VMINLINE VM_BytecodeAction
 	invokeinterfaceOffset(REGISTER_ARGS_LIST, UDATA offset)
 	{
-retry:
 		VM_BytecodeAction rc = GOTO_RUN_METHOD;
 		U_16 index = *(U_16*)(_pc + 1 + offset);
 		J9ConstantPool *ramConstantPool = J9_CP_FROM_METHOD(_literals);
@@ -8362,12 +8401,12 @@ resolve:
 				restoreGenericSpecialStackFrame(REGISTER_ARGS);
 				if (immediateAsyncPending()) {
 					rc = GOTO_ASYNC_CHECK;
-					goto done;
 				} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 					rc = GOTO_THROW_CURRENT_EXCEPTION;
-					goto done;
+				} else {
+					rc = EXECUTE_BYTECODE;
 				}
-				goto retry;
+				goto done;
 			}
 			rc = THROW_NPE;
 		} else {
@@ -8405,7 +8444,8 @@ foundITableCache:
 							 * for interfaceClass, but the unresolved for methodIndexAndArgcCount.
 							 */
 							if (J9_UNEXPECTED(J9_ITABLE_INDEX_UNRESOLVED_VALUE == methodIndex)) {
-								goto retry;
+								rc = EXECUTE_BYTECODE;
+								goto done;
 							}
 							_sendMethod = *(J9Method**)((UDATA)receiverClass + methodIndex);
 						}
@@ -8857,13 +8897,12 @@ done:
 		I_32 key = *(I_32*)_sp;
 		profileSwitch(REGISTER_ARGS, key);
 		_sp += 1;
-		while (nPairs != 0) {
-			I_32 matchKey = *data++;
-			I_32 matchOffset = *data++;
-			if (key == matchKey) {
-				_pc += matchOffset;
+		while (0 != nPairs) {
+			if (key == data[0]) {
+				_pc += data[1];
 				goto done;
 			}
+			data += 2;
 			nPairs -= 1;
 		}
 		_pc += defaultValue;
@@ -8871,10 +8910,10 @@ done:
 		return GOTO_BRANCH_WITH_ASYNC_CHECK;
 	}
 
+	/* Assume *success = false on entry */
 	VMINLINE VM_BytecodeAction
-	newLogic(REGISTER_ARGS_LIST, j9object_t *newObject)
+	newLogic(REGISTER_ARGS_LIST, j9object_t *newObject, bool *success)
 	{
-retry:
 		VM_BytecodeAction rc = EXECUTE_BYTECODE;
 		U_16 index = *(U_16*)(_pc + 1);
 		J9ConstantPool *ramConstantPool = J9_CP_FROM_METHOD(_literals);
@@ -8894,6 +8933,7 @@ retry:
 					}
 				}
 				*newObject = instance;
+				*success = true;
 				goto done;
 			}
 			/* Class requires initialization */
@@ -8904,12 +8944,10 @@ retry:
 			restoreGenericSpecialStackFrame(REGISTER_ARGS);
 			if (immediateAsyncPending()) {
 				rc = GOTO_ASYNC_CHECK;
-				goto done;
 			} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 				rc = GOTO_THROW_CURRENT_EXCEPTION;
-				goto done;
 			}
-			goto retry;
+			goto done;
 		}
 		/* Unresolved */
 		buildGenericSpecialStackFrame(REGISTER_ARGS, 0);
@@ -8919,12 +8957,9 @@ retry:
 		restoreGenericSpecialStackFrame(REGISTER_ARGS);
 		if (immediateAsyncPending()) {
 			rc = GOTO_ASYNC_CHECK;
-			goto done;
 		} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 			rc = GOTO_THROW_CURRENT_EXCEPTION;
-			goto done;
 		}
-		goto retry;
 done:
 		return rc;
 	}
@@ -8934,8 +8969,9 @@ done:
 	newImpl(REGISTER_ARGS_LIST)
 	{
 		j9object_t newObject = NULL;
-		VM_BytecodeAction rc = newLogic(REGISTER_ARGS, &newObject);
-		if (EXECUTE_BYTECODE == rc) {
+		bool success = false;
+		VM_BytecodeAction rc = newLogic(REGISTER_ARGS, &newObject, &success);
+		if (success) {
 			_pc += 3;
 			*(j9object_t*)--_sp = newObject;
 		}
@@ -8947,8 +8983,9 @@ done:
 	newdup(REGISTER_ARGS_LIST)
 	{
 		j9object_t newObject = NULL;
-		VM_BytecodeAction rc = newLogic(REGISTER_ARGS, &newObject);
-		if (EXECUTE_BYTECODE == rc) {
+		bool success = false;
+		VM_BytecodeAction rc = newLogic(REGISTER_ARGS, &newObject, &success);
+		if (success) {
 			_pc += 4;
 			*(j9object_t*)--_sp = newObject;
 			*(j9object_t*)--_sp = newObject;
@@ -8989,7 +9026,6 @@ done:
 	VMINLINE VM_BytecodeAction
 	anewarray(REGISTER_ARGS_LIST)
 	{
-retry:
 		VM_BytecodeAction rc = EXECUTE_BYTECODE;
 		U_16 index = *(U_16*)(_pc + 1);
 		J9ConstantPool *ramConstantPool = J9_CP_FROM_METHOD(_literals);
@@ -9029,9 +9065,8 @@ retry:
 			restoreGenericSpecialStackFrame(REGISTER_ARGS);
 			if (VM_VMHelpers::exceptionPending(_currentThread) ) {
 				rc = GOTO_THROW_CURRENT_EXCEPTION;
-				goto done;
 			}
-			goto retry;
+			goto done;
 		}
 		/* Unresolved */
 		buildGenericSpecialStackFrame(REGISTER_ARGS, 0);
@@ -9041,12 +9076,9 @@ retry:
 		restoreGenericSpecialStackFrame(REGISTER_ARGS);
 		if (immediateAsyncPending()) {
 			rc = GOTO_ASYNC_CHECK;
-			goto done;
 		} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 			rc = GOTO_THROW_CURRENT_EXCEPTION;
-			goto done;
 		}
-		goto retry;
 done:
 		return rc;
 	}
@@ -9055,7 +9087,6 @@ done:
 	VMINLINE VM_BytecodeAction
 	checkcast(REGISTER_ARGS_LIST)
 	{
-retry:
 		VM_BytecodeAction rc = EXECUTE_BYTECODE;
 		U_16 index = *(U_16*)(_pc + 1);
 		J9ConstantPool *ramConstantPool = J9_CP_FROM_METHOD(_literals);
@@ -9083,12 +9114,10 @@ retry:
 				restoreGenericSpecialStackFrame(REGISTER_ARGS);
 				if (immediateAsyncPending()) {
 					rc = GOTO_ASYNC_CHECK;
-					goto done;
 				} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 					rc = GOTO_THROW_CURRENT_EXCEPTION;
-					goto done;
 				}
-				goto retry;
+				goto done;
 			}
 		}
 
@@ -9106,7 +9135,6 @@ done:
 	VMINLINE VM_BytecodeAction
 	instanceof(REGISTER_ARGS_LIST)
 	{
-retry:
 		VM_BytecodeAction rc = EXECUTE_BYTECODE;
 		j9object_t obj = *(j9object_t*)_sp;
 		if (NULL != obj) {
@@ -9127,12 +9155,10 @@ retry:
 				restoreGenericSpecialStackFrame(REGISTER_ARGS);
 				if (immediateAsyncPending()) {
 					rc = GOTO_ASYNC_CHECK;
-					goto done;
 				} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 					rc = GOTO_THROW_CURRENT_EXCEPTION;
-					goto done;
 				}
-				goto retry;
+				goto done;
 			}
 		} else {
 			*(I_32*)_sp = 0;
@@ -9227,7 +9253,6 @@ done:
 	VMINLINE VM_BytecodeAction
 	multianewarray(REGISTER_ARGS_LIST)
 	{
-retry:
 		VM_BytecodeAction rc = EXECUTE_BYTECODE;
 		U_16 index = *(U_16*)(_pc + 1);
 		UDATA dimensions = _pc[3];
@@ -9264,12 +9289,9 @@ retry:
 			restoreGenericSpecialStackFrame(REGISTER_ARGS);
 			if (immediateAsyncPending()) {
 				rc = GOTO_ASYNC_CHECK;
-				goto done;
 			} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 				rc = GOTO_THROW_CURRENT_EXCEPTION;
-				goto done;
 			}
-			goto retry;
 		}
 done:
 		return rc;
@@ -9472,7 +9494,6 @@ done:
 	VMINLINE VM_BytecodeAction
 	invokedynamic(REGISTER_ARGS_LIST)
 	{
-retry:
 		VM_BytecodeAction rc = GOTO_RUN_METHODHANDLE;
 		U_16 index = *(U_16 *)(_pc + 1);
 
@@ -9500,7 +9521,7 @@ retry:
 			} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 				rc = GOTO_THROW_CURRENT_EXCEPTION;
 			} else {
-				goto retry;
+				rc = EXECUTE_BYTECODE;
 			}
 		}
 
@@ -9510,7 +9531,6 @@ retry:
 	VMINLINE VM_BytecodeAction
 	invokedynamic(REGISTER_ARGS_LIST)
 	{
-retry:
 		VM_BytecodeAction rc = GOTO_RUN_METHOD;
 		U_16 index = *(U_16 *)(_pc + 1);
 
@@ -9551,7 +9571,7 @@ retry:
 			} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 				rc = GOTO_THROW_CURRENT_EXCEPTION;
 			} else {
-				goto retry;
+				rc = EXECUTE_BYTECODE;
 			}
 		}
 
@@ -9570,7 +9590,6 @@ retry:
 	VMINLINE VM_BytecodeAction
 	invokehandle(REGISTER_ARGS_LIST)
 	{
-retry:
 		/* An invokevirtual MethodHandle.invokeExact() becomes invokehandle.
 		 * The resolved MethodType and MethodHandle.type() must be equal or
 		 * an exception will be thrown.
@@ -9609,7 +9628,7 @@ retry:
 			} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 				rc = GOTO_THROW_CURRENT_EXCEPTION;
 			} else {
-				goto retry;
+				rc = EXECUTE_BYTECODE;
 			}
 		}
 done:
@@ -9619,7 +9638,6 @@ done:
 	VMINLINE VM_BytecodeAction
 	invokehandle(REGISTER_ARGS_LIST)
 	{
-retry:
 		VM_BytecodeAction rc = GOTO_RUN_METHOD;
 		U_16 index = *(U_16 *)(_pc + 1);
 
@@ -9652,7 +9670,7 @@ retry:
 			} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 				rc = GOTO_THROW_CURRENT_EXCEPTION;
 			} else {
-				goto retry;
+				rc = EXECUTE_BYTECODE;
 			}
 		}
 
@@ -9672,7 +9690,6 @@ retry:
 	{
 #if defined(J9VM_OPT_METHOD_HANDLE)
 		/* MH.invoke is translated to invokehandlegeneric. */
-retry:
 		VM_BytecodeAction rc = GOTO_RUN_METHODHANDLE;
 		U_16 index = *(U_16 *)(_pc + 1);
 
@@ -9726,7 +9743,7 @@ retry:
 			} else if (VM_VMHelpers::exceptionPending(_currentThread)) {
 				rc = GOTO_THROW_CURRENT_EXCEPTION;
 			} else {
-				goto retry;
+				rc = EXECUTE_BYTECODE;
 			}
 		}
 done:
@@ -10785,13 +10802,13 @@ public:
 		JUMP_TABLE_ENTRY(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_VALUEHEADERSIZE),
 		JUMP_TABLE_ENTRY(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_GETOBJECTSIZE),
 		JUMP_TABLE_ENTRY(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_ISFLATFIELD),
+		JUMP_TABLE_ENTRY(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_ISFLATPAYLOADBINARY),
 #endif /* J9VM_OPT_VALHALLA_VALUE_TYPES */
 #if defined(J9VM_OPT_VALHALLA_FLATTENABLE_VALUE_TYPES)
 		JUMP_TABLE_ENTRY(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_GETFLATVALUE),
 		JUMP_TABLE_ENTRY(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_PUTFLATVALUE),
 		JUMP_TABLE_ENTRY(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_ISFLATARRAY),
 		JUMP_TABLE_ENTRY(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_ISFIELDATOFFSETFLATTENED),
-		JUMP_TABLE_ENTRY(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_ISFLATPAYLOADBINARY),
 #endif /* defined(J9VM_OPT_VALHALLA_FLATTENABLE_VALUE_TYPES) */
 		JUMP_TABLE_ENTRY(J9_BCLOOP_SEND_TARGET_INL_INTERNALS_GET_INTERFACES),
 		JUMP_TABLE_ENTRY(J9_BCLOOP_SEND_TARGET_INL_ARRAY_NEW_ARRAY_IMPL),
@@ -11416,6 +11433,8 @@ runMethod: {
 		PERFORM_ACTION(inlUnsafeGetObjectSize(REGISTER_ARGS));
 	JUMP_TARGET(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_ISFLATFIELD):
 		PERFORM_ACTION(inlUnsafeIsFlatField(REGISTER_ARGS));
+	JUMP_TARGET(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_ISFLATPAYLOADBINARY):
+		PERFORM_ACTION(inlUnsafeIsFlatPayloadBinary(REGISTER_ARGS));
 #endif /* J9VM_OPT_VALHALLA_VALUE_TYPES */
 #if defined(J9VM_OPT_VALHALLA_FLATTENABLE_VALUE_TYPES)
 	JUMP_TARGET(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_GETFLATVALUE):
@@ -11426,8 +11445,6 @@ runMethod: {
 		PERFORM_ACTION(inlUnsafeIsFlatArray(REGISTER_ARGS));
 	JUMP_TARGET(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_ISFIELDATOFFSETFLATTENED):
 		PERFORM_ACTION(inlUnsafeIsFieldAtOffsetFlattened(REGISTER_ARGS));
-	JUMP_TARGET(J9_BCLOOP_SEND_TARGET_INL_UNSAFE_ISFLATPAYLOADBINARY):
-		PERFORM_ACTION(inlUnsafeIsFlatPayloadBinary(REGISTER_ARGS));
 #endif /* defined(J9VM_OPT_VALHALLA_FLATTENABLE_VALUE_TYPES) */
 	JUMP_TARGET(J9_BCLOOP_SEND_TARGET_INL_INTERNALS_GET_INTERFACES):
 		PERFORM_ACTION(inlInternalsGetInterfaces(REGISTER_ARGS));

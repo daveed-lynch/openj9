@@ -341,7 +341,7 @@ convertMethodSignature(J9VMThread *vmThread, J9UTF8 *methodSig)
  *
  * @return an extended NPE message or NULL if such a message can't be generated
  */
-static char*
+static char *
 getCompleteNPEMessage(J9VMThread *vmThread, U_8 *bcCurrentPtr, J9ROMClass *romClass, char *npeCauseMsg, bool isMethodFlag)
 {
 	char *npeMsg = NULL;
@@ -468,7 +468,8 @@ getCompleteNPEMessage(J9VMThread *vmThread, U_8 *bcCurrentPtr, J9ROMClass *romCl
 			}
 			break;
 		}
-		case JBgetfield: /* FALLTHROUGH */
+		case JBputstatic:
+		case JBgetfield:
 		case JBputfield: {
 			U_16 index = PARAM_16(bcCurrentPtr, 1);
 			UDATA cpType = J9_CP_TYPE(J9ROMCLASS_CPSHAPEDESCRIPTION(romClass), index);
@@ -480,7 +481,23 @@ getCompleteNPEMessage(J9VMThread *vmThread, U_8 *bcCurrentPtr, J9ROMClass *romCl
 				J9ROMNameAndSignature *fieldNameAndSig = J9ROMFIELDREF_NAMEANDSIGNATURE((J9ROMFieldRef *)cpItem);
 				J9UTF8 *fieldName = J9ROMNAMEANDSIGNATURE_NAME(fieldNameAndSig);
 
-				if (NULL == npeCauseMsg) {
+				if (JBputstatic == bcCurrent) {
+					/* A putstatic NPE can only be caused by storing null into a
+					 * null-restricted static field.
+					 */
+					if (NULL != npeCauseMsg) {
+						/* The interpreter already built a detailed message.
+						 * Use it directly as the final NPE message.
+						 */
+						Trc_VM_GetCompleteNPEMessage_JBputstatic_npeCauseMsg(vmThread, npeCauseMsg);
+						npeMsg = npeCauseMsg;
+						npeCauseMsg = NULL;
+					} else {
+						/* Message here matches J9NLS_VM_CANNOT_STORE_NULL_IN_NULL_RESTRICTED_FIELD. */
+						msgTemplate = "Cannot assign null to null-restricted field \"%.*s\"";
+						npeMsg = getMsgWithAllocation(vmThread, msgTemplate, J9UTF8_LENGTH(fieldName), J9UTF8_DATA(fieldName));
+					}
+				} else if (NULL == npeCauseMsg) {
 					if (JBputfield == bcCurrent) {
 						msgTemplate = "Cannot assign field \"%.*s\"";
 					} else {
@@ -793,7 +810,7 @@ computeNPEMsgAtPC(J9VMThread *vmThread, J9ROMMethod *romMethod, J9ROMClass *romC
 		j9mem_free_memory(*npeMsg);
 		*npeMsg = NULL;
 	}
-	if (BYTECODE_TEMP_CHANGED == npePC) {
+	if ((BYTECODE_TEMP_CHANGED == npePC) || (BYTECODE_BRANCH_TARGET == npePC)) {
 		/* *npeMsg is NULL */
 	} else {
 		J9ROMConstantPoolItem *constantPool = J9_ROM_CP_FROM_ROM_CLASS(romClass);
@@ -1302,8 +1319,10 @@ getMsgWithAllocation(J9VMThread *vmThread, const char *msgTemplate, ...)
 
 	va_start(args, msgTemplate);
 	UDATA msgLen = j9str_vprintf(NULL, 0, msgTemplate, args);
+	va_end(args);
 	char *resultMsg = (char *)j9mem_allocate_memory(msgLen, OMRMEM_CATEGORY_VM);
 	/* NULL check omitted since j9str_vprintf accepts NULL (as above) */
+	va_start(args, msgTemplate);
 	j9str_vprintf(resultMsg, msgLen, msgTemplate, args);
 	va_end(args);
 

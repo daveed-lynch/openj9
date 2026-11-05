@@ -1,6 +1,5 @@
-/*[INCLUDE-IF Sidecar18-SE]*/
-/*
- * Copyright IBM Corp. and others 2004
+/*******************************************************************************
+ * Copyright IBM Corp. and others 2024
  *
  * This program and the accompanying materials are made available under
  * the terms of the Eclipse Public License 2.0 which accompanies this
@@ -19,40 +18,31 @@
  * [2] https://openjdk.org/legal/assembly-exception.html
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0 OR GPL-2.0-only WITH OpenJDK-assembly-exception-1.0
- */
-package com.ibm.jvm.j9.dump.indexsupport;
+ *******************************************************************************/
 
-import org.xml.sax.Attributes;
+#ifndef J9_DEFERRED_OSR_ASSUMPTIONS_INCL
+#define J9_DEFERRED_OSR_ASSUMPTIONS_INCL
 
-import com.ibm.dtfj.java.j9.JavaClass;
+#include "compile/Compilation.hpp"
+#include "optimizer/DeferredOSRAssumption.hpp"
+
+namespace TR {
 
 /**
- * @author jmdisher
- *
+ * \brief A deferred OSR assumption that a given class has no illegal static
+ * final field modifications.
  */
-public class NodeConstantPool extends NodeAbstract
-{
-	private JavaClass _class;
+class DeferredStaticFinalOSRAssumption : public DeferredOSRAssumption {
+    TR_OpaqueClassBlock * const _clazz;
 
-	public NodeConstantPool(JavaClass theClass, Attributes attributes)
-	{
-		_class = theClass;
-	}
+public:
+    DeferredStaticFinalOSRAssumption(TR_OpaqueClassBlock *clazz)
+        : _clazz(clazz)
+    {}
 
-	/* (non-Javadoc)
-	 * @see com.ibm.jvm.j9.dump.indexsupport.IParserNode#nodeToPushAfterStarting(java.lang.String, java.lang.String, java.lang.String, org.xml.sax.Attributes)
-	 */
-	public IParserNode nodeToPushAfterStarting(String uri, String localName, String qName, Attributes attributes)
-	{
-		IParserNode child = null;
+    virtual void commit(TR::Compilation *comp) { comp->addClassForStaticFinalFieldModification(_clazz); }
+};
 
-		if (qName.equals("object")) {
-			child = new NodeObject(_class, attributes);
-		} else if (qName.equals("class")) {
-			child = new NodeClassInConstantPool(_class, attributes);
-		} else {
-			child = super.nodeToPushAfterStarting(uri, localName, qName, attributes);
-		}
-		return child;
-	}
-}
+} // namespace TR
+
+#endif // J9_DEFERRED_OSR_ASSUMPTIONS_INCL

@@ -60,6 +60,7 @@
 #include "zip_api.h"
 #if JAVA_SPEC_VERSION >= 21
 #include "ContinuationHelpers.hpp"
+#include "jvmtiInternal.h"
 #endif /* JAVA_SPEC_VERSION >= 21 */
 
 #include <limits.h>
@@ -100,7 +101,28 @@ static jvmtiIterationControl spaceIteratorCallback  (J9JavaVM* vm, J9MM_IterateS
 static jvmtiIterationControl regionIteratorCallback (J9JavaVM* vm, J9MM_IterateRegionDescriptor* regionDescription, void* userData);
 #if JAVA_SPEC_VERSION >= 21
 static jvmtiIterationControl continuationIteratorCallback(J9VMThread *vmThread, J9MM_IterateObjectDescriptor *object, void *userData);
+
+/*
+ * Counts of virtual threads computed at javacore generation time.
+ * liveCount = vthreads that are started but not yet terminated (mounted + unmounted).
+ * mountedCount = live vthreads currently mounted on a J9VMThread carrier.
+ */
+struct VThreadCounts {
+	J9JavaVM *vm;
+	UDATA liveCount;    /* vthreads that are live (started but not terminated) */
+	UDATA mountedCount; /* live vthreads currently mounted on a carrier thread */
+
+	VThreadCounts(J9JavaVM *vm)
+		: vm(vm)
+		, liveCount(0)
+		, mountedCount(0)
+	{
+	}
+
+	void count();
+};
 #endif /* JAVA_SPEC_VERSION >= 21 */
+
 static UDATA getObjectMonitorCount(J9JavaVM *vm);
 static UDATA getAllocatedVMThreadCount (J9JavaVM *vm);
 
@@ -129,6 +151,8 @@ UDATA protectedWriteThreadsWithNativeStacks (struct J9PortLibrary *, void *);
 UDATA protectedWriteThreadsJavaOnly (struct J9PortLibrary *, void *);
 UDATA protectedWriteThreadsUsageSummary (struct J9PortLibrary *, void *);
 #if JAVA_SPEC_VERSION >= 21
+static UDATA protectedCountVirtualThreads(struct J9PortLibrary *, void *);
+static UDATA handlerCountVirtualThreads(struct J9PortLibrary *, U_32, void *, void *);
 UDATA protectedWriteUnmountedThreads(struct J9PortLibrary *, void *);
 UDATA handlerWriteUnmountedThreads  (struct J9PortLibrary *, U_32, void *, void *);
 #endif /* JAVA_SPEC_VERSION >= 21 */
@@ -343,6 +367,9 @@ private :
 	void        writeObject                  (j9object_t obj);
 	void        writeThread                  (J9VMThread* vmThread, J9PlatformThread *nativeThread, UDATA vmstate, UDATA javaState, UDATA javaPriority, j9object_t lockObject, J9VMThread *lockOwnerThread);
 	void        writeThreadName              (J9VMThread* vmThread);
+#if JAVA_SPEC_VERSION >= 24
+	void        writeContinuationName        (J9VMContinuation *continuation);
+#endif /* JAVA_SPEC_VERSION >= 24 */
 	void        writeThreadBlockers          (J9VMThread* vmThread, UDATA vmstate, j9object_t lockObject, J9VMThread *lockOwnerThread);
 	UDATA       writeFrame                   (J9StackWalkState* state);
 	UDATA       writeExceptionFrame          (void *userData, J9ROMClass* romClass, J9ROMMethod* romMethod, J9UTF8* sourceFile, UDATA lineNumber);
@@ -1890,7 +1917,7 @@ JavaCoreDumpWriter::writeMemoryCountersSection(void)
 		struct immap_privatemstats ztpfNativeStats;
 		int rc = mprivatestats(&ztpfNativeStats);
 
-		_OutputStream.writeCharacters("0SECTION       Native configuration information for z/TPF\n");
+		_OutputStream.writeCharacters("0SECTION       Native z/TPF configuration subcomponent\n");
 		_OutputStream.writeCharacters("NULL           ==========================================\n");
 		if (0 != rc) {
 			_OutputStream.writeCharacters("1TPFCONFIG     Unavailable: ");
@@ -2135,16 +2162,43 @@ JavaCoreDumpWriter::writeThreadSection(void)
 		"1XMPOOLINFO    JVM Thread pool info:\n");
 	_OutputStream.writeCharacters(
 		"2XMPOOLTOTAL       Current total number of pooled threads: ");
-	_OutputStream.writeInteger(_AllocatedVMThreadCount, "%i");
+	_OutputStream.writeInteger(_AllocatedVMThreadCount, "%zu");
 	_OutputStream.writeCharacters("\n");
 	_OutputStream.writeCharacters(
 		"2XMPOOLLIVE        Current total number of live threads: ");
-	_OutputStream.writeInteger(_VirtualMachine->totalThreadCount, "%i");
+	_OutputStream.writeInteger(_VirtualMachine->totalThreadCount, "%zu");
 	_OutputStream.writeCharacters("\n");
 		_OutputStream.writeCharacters(
 		"2XMPOOLDAEMON      Current total number of live daemon threads: ");
-	_OutputStream.writeInteger(_VirtualMachine->daemonThreadCount, "%i");
+	_OutputStream.writeInteger(_VirtualMachine->daemonThreadCount, "%zu");
 	_OutputStream.writeCharacters("\n");
+#if JAVA_SPEC_VERSION >= 21
+	{
+		VThreadCounts vtc(_VirtualMachine);
+		UDATA sink = 0;
+		bool countFaulted = J9PORT_SIG_EXCEPTION_OCCURRED == j9sig_protect(
+				protectedCountVirtualThreads, &vtc,
+				handlerCountVirtualThreads, NULL,
+				J9PORT_SIG_FLAG_SIGALLSYNC | J9PORT_SIG_FLAG_MAY_RETURN,
+				&sink);
+		_OutputStream.writeCharacters(
+			"2XMVIRTUALLIVE     Current live virtual threads: ");
+		if (countFaulted) {
+			_OutputStream.writeCharacters("unavailable\n");
+		} else {
+			_OutputStream.writeInteger(vtc.liveCount, "%zu");
+			_OutputStream.writeCharacters("\n");
+		}
+		_OutputStream.writeCharacters(
+			"2XMVIRTUALMOUNTED  Current mounted virtual threads: ");
+		if (countFaulted) {
+			_OutputStream.writeCharacters("unavailable\n");
+		} else {
+			_OutputStream.writeInteger(vtc.mountedCount, "%zu");
+			_OutputStream.writeCharacters("\n");
+		}
+	}
+#endif /* JAVA_SPEC_VERSION >= 21 */
 
 #if !defined(OSX)
 	/* if thread preempt is enabled, and we have the lock, then collect the native stacks */
@@ -2941,7 +2995,7 @@ JavaCoreDumpWriter::writeMemoryDisclaimInfoSection(void)
 
 	J9JITMemDisclaimInfo &info = jitConfig->memDisclaimInfo;
 
-	_OutputStream.writeCharacters("0SECTION       Memory disclaim info dump routine\n");
+	_OutputStream.writeCharacters("0SECTION       Memory disclaim subcomponent dump routine\n");
 	_OutputStream.writeCharacters("NULL           ------------------------------------------------------------------------\n");
 	_OutputStream.writeCharacters("1CIDISCLSUBS   Disclaim subsystem status\n");
 	_OutputStream.writeCharacters("NULL           ------------------------------------------------------------------------\n");
@@ -4499,7 +4553,17 @@ JavaCoreDumpWriter::writeMonitorObject(J9ThreadMonitor* monitor, j9object_t obj,
 
 	/* Skip monitor if not interesting */
 	if (((NULL != obj) || (NULL == lock->name)) && (NULL == owner) && (NULL == lockOwner) && (NULL == lock->waiting)) {
+#if JAVA_SPEC_VERSION < 24
 		return;
+#else /* JAVA_SPEC_VERSION < 24 */
+		/* Monitors with waiting virtual threads are still interesting. */
+		J9ObjectMonitor *objectMonitor = (NULL != obj) ? monitorTablePeek(_VirtualMachine, obj) : NULL;
+		if ((NULL == objectMonitor)
+			|| ((NULL == objectMonitor->waitingContinuations) && (0 == objectMonitor->virtualThreadWaitCount))
+		) {
+			return;
+		}
+#endif /* JAVA_SPEC_VERSION < 24 */
 	}
 
 	/* Describe the monitor */
@@ -4518,16 +4582,25 @@ JavaCoreDumpWriter::writeMonitorObject(J9ThreadMonitor* monitor, j9object_t obj,
 	/* Describe its owning thread */
 	bool inflated = J9_ARE_ANY_BITS_SET(lock->flags, J9THREAD_MONITOR_INFLATED);
 
+#if JAVA_SPEC_VERSION >= 24
 	if (IS_J9_OBJECT_MONITOR_OWNER_DETACHED(lockOwner)) {
-		if (inflated) {
-			_OutputStream.writeCharacters("owner \"");
+		_OutputStream.writeCharacters("owner \"");
+		/* Resolve the owning virtual thread name via the continuation's vthread reference. */
+		J9ObjectMonitor *objectMonitor = (NULL != obj) ? monitorTablePeek(_VirtualMachine, obj) : NULL;
+		if ((NULL == objectMonitor) || (NULL == objectMonitor->ownerContinuation)) {
+			_OutputStream.writeCharacters("<detached virtual thread>\"");
 		} else {
-			_OutputStream.writeCharacters("Flat locked by \"");
+			J9VMContinuation *ownerCont = objectMonitor->ownerContinuation;
+			writeContinuationName(ownerCont);
+			_OutputStream.writeCharacters("\" (J9VMContinuation:");
+			_OutputStream.writePointer(ownerCont);
+			_OutputStream.writeCharacters(")");
 		}
-		_OutputStream.writeCharacters("<detached virtual thread>");
 		_OutputStream.writeCharacters(", entry count ");
 		_OutputStream.writeInteger(count, "%zu");
-	} else if ((NULL != owner) || (NULL != lockOwner)) {
+	} else
+#endif /* JAVA_SPEC_VERSION >= 24 */
+	if ((NULL != owner) || (NULL != lockOwner)) {
 		if (inflated) {
 			_OutputStream.writeCharacters("owner \"");
 		} else {
@@ -4584,6 +4657,32 @@ JavaCoreDumpWriter::writeMonitorObject(J9ThreadMonitor* monitor, j9object_t obj,
 		threadIndex++;
 	}
 
+#if JAVA_SPEC_VERSION >= 24
+	if (NULL != obj) {
+		J9ObjectMonitor *objectMonitor = monitorTablePeek(_VirtualMachine, obj);
+		if (NULL != objectMonitor) {
+			/* Output virtual threads waiting to enter. */
+			J9VMContinuation *blockedCont = _VirtualMachine->blockedContinuations;
+			while (NULL != blockedCont) {
+				if (blockedCont->objectWaitMonitor == objectMonitor) {
+					if (0 == blockedThreadCount) {
+						_OutputStream.writeCharacters("3LKWAITERQ            Waiting to enter:\n");
+					}
+
+					_OutputStream.writeCharacters("3LKWAITER                \"");
+					writeContinuationName(blockedCont);
+					_OutputStream.writeCharacters("\" (J9VMContinuation:");
+					_OutputStream.writePointer(blockedCont);
+					_OutputStream.writeCharacters(")\n");
+
+					blockedThreadCount += 1;
+				}
+				blockedCont = blockedCont->nextWaitingContinuation;
+			}
+		}
+	}
+#endif /* JAVA_SPEC_VERSION >= 24 */
+
 	threadIndex = 0;
 	int waitingThreadCount = 0;
 
@@ -4603,10 +4702,34 @@ JavaCoreDumpWriter::writeMonitorObject(J9ThreadMonitor* monitor, j9object_t obj,
 				_OutputStream.writePointer(walkThread);
 				_OutputStream.writeCharacters(")\n");
 
-				waitingThreadCount++;
+				waitingThreadCount += 1;
 		}
 		threadIndex++;
 	}
+
+#if JAVA_SPEC_VERSION >= 24
+	if (NULL != obj) {
+		J9ObjectMonitor *objectMonitor = monitorTablePeek(_VirtualMachine, obj);
+		if (NULL != objectMonitor) {
+			/* Output virtual threads waiting to be notified. */
+			J9VMContinuation *waitingCont = objectMonitor->waitingContinuations;
+			while (NULL != waitingCont) {
+				if (0 == waitingThreadCount) {
+					_OutputStream.writeCharacters("3LKNOTIFYQ            Waiting to be notified:\n");
+				}
+
+				_OutputStream.writeCharacters("3LKWAITNOTIFY            \"");
+				writeContinuationName(waitingCont);
+				_OutputStream.writeCharacters("\" (J9VMContinuation:");
+				_OutputStream.writePointer(waitingCont);
+				_OutputStream.writeCharacters(")\n");
+
+				waitingThreadCount += 1;
+				waitingCont = waitingCont->nextWaitingContinuation;
+			}
+		}
+	}
+#endif /* JAVA_SPEC_VERSION >= 24 */
 }
 
 /**************************************************************************************************/
@@ -5063,6 +5186,34 @@ JavaCoreDumpWriter::writeThreadName(J9VMThread* vmThread)
 		_OutputStream.writeCharacters("[osthread]");
 	}
 }
+
+#if JAVA_SPEC_VERSION >= 24
+/**************************************************************************************************/
+/*                                                                                                */
+/* JavaCoreDumpWriter::writeContinuationName() method implementation                              */
+/*                                                                                                */
+/**************************************************************************************************/
+void
+JavaCoreDumpWriter::writeContinuationName(J9VMContinuation *continuation)
+{
+	if (NULL == continuation) {
+		_OutputStream.writeCharacters("<unknown virtual thread>");
+	} else if (NULL == continuation->vthread) {
+		_OutputStream.writeCharacters("<dead virtual thread>");
+	} else {
+		J9VMThread *vmThread = _Context->onThread;
+		j9object_t nameObject = J9VMJAVALANGTHREAD_NAME(vmThread, continuation->vthread);
+		char *vthreadName = getVMThreadNameFromString(vmThread, nameObject);
+		if (NULL == vthreadName) {
+			_OutputStream.writeCharacters("<name unavailable>");
+		} else {
+			PORT_ACCESS_FROM_PORT(_PortLibrary);
+			_OutputStream.writeCharacters(vthreadName);
+			j9mem_free_memory(vthreadName);
+		}
+	}
+}
+#endif /* JAVA_SPEC_VERSION >= 24 */
 
 /**************************************************************************************************/
 /*                                                                                                */
@@ -6201,22 +6352,91 @@ regionIteratorCallback(J9JavaVM* virtualMachine, J9MM_IterateRegionDescriptor* r
 }
 
 #if JAVA_SPEC_VERSION >= 21
+/*
+ * Counting callback for j9mm_iterate_all_continuation_objects().
+ * userData points to a VThreadCounts struct.
+ * Increments liveCount for every vthread whose Continuation object represents
+ * a live (started but not terminated) virtual thread, including mounted ones.
+ */
+static jvmtiIterationControl
+countVThreadCallback(J9VMThread *vmThread, J9MM_IterateObjectDescriptor *object, void *userData)
+{
+	VThreadCounts *counts = (VThreadCounts *)userData;
+	j9object_t vthread = J9VMJDKINTERNALVMCONTINUATION_VTHREAD(vmThread, object->object);
+	if (NULL == vthread) {
+		return JVMTI_ITERATION_CONTINUE;
+	}
+	J9VMContinuation *continuation = J9VMJDKINTERNALVMCONTINUATION_VMREF(vmThread, object->object);
+	if (NULL != continuation) {
+		/* Has a J9VMContinuation: the vthread has been mounted at some point and is live. */
+		counts->liveCount += 1;
+	} else {
+		/* No J9VMContinuation: count states that represent a live vthread. */
+		jint state = J9VMJAVALANGVIRTUALTHREAD_STATE(vmThread, vthread);
+		switch (state & ~JVMTI_VTHREAD_STATE_SUSPENDED) {
+		case JVMTI_VTHREAD_STATE_NEW:
+		case JVMTI_VTHREAD_STATE_STARTED:
+		case JVMTI_VTHREAD_STATE_TERMINATED:
+			/* not yet running or already done - skip */
+			break;
+		default:
+			counts->liveCount += 1;
+			break;
+		}
+	}
+	return JVMTI_ITERATION_CONTINUE;
+}
+
+/*
+ * Compute current virtual thread counts by walking live data structures.
+ * liveCount = vthreads that are started but not yet terminated (mounted + unmounted).
+ * mountedCount = live vthreads currently mounted on a J9VMThread carrier.
+ * This is called during javacore generation.
+ */
+void
+VThreadCounts::count()
+{
+	PORT_ACCESS_FROM_JAVAVM(vm);
+
+	/* Count mounted vthreads via the J9VMThread list. */
+	J9VMThread *walkThread = J9_LINKED_LIST_START_DO(vm->mainThread);
+	while (NULL != walkThread) {
+		j9object_t threadObject = walkThread->threadObject;
+		if ((NULL != threadObject)
+			&& IS_JAVA_LANG_VIRTUALTHREAD(walkThread, threadObject)
+		) {
+			mountedCount += 1;
+		}
+		walkThread = J9_LINKED_LIST_NEXT_DO(vm->mainThread, walkThread);
+	}
+
+	/* Count all live vthreads (mounted + unmounted) via the continuation heap iterator.
+	 * Mounted vthreads are included here; liveCount will be >= mountedCount.
+	 */
+	vm->memoryManagerFunctions->j9mm_iterate_all_continuation_objects(
+			vm->mainThread, PORTLIB, 0, countVThreadCallback, this);
+}
+
 static jvmtiIterationControl
 continuationIteratorCallback(J9VMThread *vmThread, J9MM_IterateObjectDescriptor *object, void *userData)
 {
+	JavaCoreDumpWriter *jcw = (JavaCoreDumpWriter *)userData;
+	PORT_ACCESS_FROM_PORT(jcw->_PortLibrary);
+	j9object_t vthread = J9VMJDKINTERNALVMCONTINUATION_VTHREAD(vmThread, object->object);
+	if (NULL == vthread) {
+		return JVMTI_ITERATION_CONTINUE;
+	}
+	j9object_t nameObject = J9VMJAVALANGTHREAD_NAME(vmThread, vthread);
+	char *threadName = getVMThreadNameFromString(vmThread, nameObject);
 	J9VMContinuation *continuation = J9VMJDKINTERNALVMCONTINUATION_VMREF(vmThread, object->object);
+
 	if (NULL != continuation) {
-		PORT_ACCESS_FROM_VMC(vmThread);
-		JavaCoreDumpWriter *jcw = (JavaCoreDumpWriter *)userData;
-		j9object_t vthread = J9VMJDKINTERNALVMCONTINUATION_VTHREAD(vmThread, object->object);
 		j9object_t threadObj = vthread;
 		ContinuationState continuationState = *VM_ContinuationHelpers::getContinuationStateAddress(vmThread, object->object);
 		BOOLEAN isMounted = VM_ContinuationHelpers::isFullyMounted(continuationState);
 		if (isMounted) {
 			threadObj = J9VMJAVALANGVIRTUALTHREAD_CARRIERTHREAD(vmThread, vthread);
 		}
-		j9object_t nameObject = J9VMJAVALANGTHREAD_NAME(vmThread, threadObj);
-		char *threadName = getVMThreadNameFromString(vmThread, nameObject);
 		/* Write the first thread descriptor word. */
 		jcw->_OutputStream.writeCharacters("3XMVTHDINFO        \"");
 		jcw->_OutputStream.writeCharacters(threadName);
@@ -6234,7 +6454,6 @@ continuationIteratorCallback(J9VMThread *vmThread, J9MM_IterateObjectDescriptor 
 			jcw->_OutputStream.writeCharacters("Virtual");
 		}
 		jcw->_OutputStream.writeCharacters("\n");
-		j9mem_free_memory(threadName);
 
 		J9StackWalkState walkState;
 		struct walkClosure closure;
@@ -6256,8 +6475,27 @@ continuationIteratorCallback(J9VMThread *vmThread, J9MM_IterateObjectDescriptor 
 		walkState.userData1 = (void *)jcw;
 		walkState.userData2 = &depth; /* Use this for a depth count. */
 		walkState.frameWalkFunction = writeFrameCallBack;
+#if JAVA_SPEC_VERSION >= 24
+		/* Gather owned monitor information from the continuation so writeFrame
+		 * can include the monitors associated with the correct stack frames.
+		 */
+		J9ObjectMonitorInfo monitorInfos[JavaCoreDumpWriter::_MaximumMonitorInfosPerThread];
+		IDATA monitorCount = 0;
+		memset(monitorInfos, 0, sizeof(monitorInfos));
+		{
+			struct walkClosure monitorClosure;
+			void *monitorArgs[] = { &stackThread, monitorInfos, &monitorCount };
+			monitorClosure.jcw = jcw;
+			monitorClosure.state = monitorArgs;
+			j9sig_protect(protectedGetOwnedObjectMonitors, &monitorClosure, handlerGetOwnedObjectMonitors, jcw,
+					J9PORT_SIG_FLAG_SIGALLSYNC | J9PORT_SIG_FLAG_MAY_RETURN, &sink);
+		}
+		walkState.userData3 = monitorInfos;
+		walkState.userData4 = (void *)monitorCount;
+#else /* JAVA_SPEC_VERSION >= 24 */
 		walkState.userData3 = NULL;
 		walkState.userData4 = 0;
+#endif /* JAVA_SPEC_VERSION >= 24 */
 
 		closure.jcw = jcw;
 		closure.state = &walkState;
@@ -6265,7 +6503,29 @@ continuationIteratorCallback(J9VMThread *vmThread, J9MM_IterateObjectDescriptor 
 			jcw->_OutputStream.writeCharacters("3XMTHREADINFO3           No Java callstack associated with this thread\n");
 		}
 		jcw->_OutputStream.writeCharacters("NULL\n");
+	} else {
+		/* The vthread has no J9VMContinuation. Skip states in which the vthread
+		 * has never been mounted and is not waiting to run (NEW, STARTED, TERMINATED).
+		 * Report all other states, including SUSPENDED variants.
+		 */
+		jint state = J9VMJAVALANGVIRTUALTHREAD_STATE(vmThread, vthread);
+		switch (state & ~JVMTI_VTHREAD_STATE_SUSPENDED) {
+		case JVMTI_VTHREAD_STATE_NEW:
+		case JVMTI_VTHREAD_STATE_STARTED:
+		case JVMTI_VTHREAD_STATE_TERMINATED:
+			/* skip */
+			break;
+		default:
+			jcw->_OutputStream.writeCharacters("3XMVTHDINFO        \"");
+			jcw->_OutputStream.writeCharacters(threadName);
+			jcw->_OutputStream.writeCharacters("\" J9VMContinuation:0x0, java/lang/Thread:");
+			jcw->_OutputStream.writePointer(vthread);
+			jcw->_OutputStream.writeCharacters("\n3XMVTHDINFO1             Type: Virtual (not yet mounted)\n");
+			jcw->_OutputStream.writeCharacters("NULL\n");
+			break;
+		}
 	}
+	j9mem_free_memory(threadName);
 
 	return JVMTI_ITERATION_CONTINUE;
 }
@@ -6491,6 +6751,26 @@ protectedWriteThreadsUsageSummary(struct J9PortLibrary *portLibrary, void *args)
 }
 
 #if JAVA_SPEC_VERSION >= 21
+/**
+ * Wrapper function for VThreadCounts::count().
+ * @param portLibrary[in] pointer to the port library
+ * @param args[in,out] pointer to a VThreadCounts struct to populate
+ * @return 0
+ */
+static UDATA
+protectedCountVirtualThreads(struct J9PortLibrary *portLibrary, void *args)
+{
+	VThreadCounts *vtc = (VThreadCounts *)args;
+	vtc->count();
+	return 0;
+}
+
+static UDATA
+handlerCountVirtualThreads(struct J9PortLibrary *portLibrary, U_32 gpType, void *gpInfo, void *userData)
+{
+	return J9PORT_SIG_EXCEPTION_RETURN;
+}
+
 /**
  * Wrapper function for writeUnmountedThreads.
  * If the call to writeUnmountedThreads fails, handlerWriteUnmountedThreads

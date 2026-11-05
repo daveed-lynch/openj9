@@ -26,11 +26,139 @@
 
 #include "JFRChunkWriter.hpp"
 #include "JFRConstantPoolTypes.hpp"
+#if JAVA_SPEC_VERSION >= 17
+#include "JFRPeriodic.hpp"
+#include "JFRTypeMappings.hpp"
+#endif /* JAVA_SPEC_VERSION >= 17 */
+
+const VM_JFRChunkWriter::EventIds VM_JFRChunkWriter::v1Events = {
+	2,
+	3,
+	4,
+	5,
+	6,
+	7,
+	27,
+	35,
+	36,
+	38,
+	39,
+	83,
+	87,
+	88,
+	89,
+	90,
+	91,
+	92,
+	93,
+	95,
+	96,
+	97,
+	98,
+	99,
+	86,
+	100,
+	101,
+	107,
+	108,
+	109,
+	111,
+	112,
+	113,
+	114,
+	130,
+	131,
+	132,
+	133,
+	134,
+	163,
+	164,
+	165,
+	166,
+	167,
+	168,
+	169,
+	170,
+	171,
+	172,
+	173,
+	180,
+	186,
+	187,
+	188,
+	189,
+	198,
+};
+
+#if JAVA_SPEC_VERSION >= 17
+const VM_JFRChunkWriter::EventIds VM_JFRChunkWriter::v2Events = {
+	JfrThreadStartEvent,
+	JfrThreadEndEvent,
+#if JAVA_SPEC_VERSION == 17
+	JfrThreadSleepEvent,
+#else /* JAVA_SPEC_VERSION == 17 */
+	4,
+#endif /* JAVA_SPEC_VERSION == 17 */
+	JfrThreadParkEvent,
+	JfrJavaMonitorEnterEvent,
+	JfrJavaMonitorWaitEvent,
+	JfrGCHeapSummaryEvent,
+	JfrGarbageCollectionEvent,
+	JfrSystemGCEvent,
+	JfrYoungGarbageCollectionEvent,
+	JfrOldGarbageCollectionEvent,
+	JfrObjectAllocationSampleEvent,
+	JfrJVMInformationEvent,
+	JfrOSInformationEvent,
+	JfrVirtualizationInformationEvent,
+	JfrInitialSystemPropertyEvent,
+	JfrInitialEnvironmentVariableEvent,
+	JfrSystemProcessEvent,
+	JfrCPUInformationEvent,
+	JfrCPULoadEvent,
+	JfrThreadCPULoadEvent,
+	JfrThreadContextSwitchRateEvent,
+	JfrNetworkUtilizationEvent,
+	JfrJavaThreadStatisticsEvent,
+	JfrDataLossEvent,
+	JfrClassLoadingStatisticsEvent,
+	JfrClassLoaderStatisticsEvent,
+	JfrThreadAllocationStatisticsEvent,
+	JfrPhysicalMemoryEvent,
+	JfrExecutionSampleEvent,
+	JfrThreadDumpEvent,
+	JfrNativeLibraryEvent,
+	JfrModuleRequireEvent,
+	JfrModuleExportEvent,
+	JfrGCConfigurationEvent,
+	JfrGCSurvivorConfigurationEvent,
+	JfrGCTLABConfigurationEvent,
+	JfrGCHeapConfigurationEvent,
+	JfrYoungGenerationConfigurationEvent,
+	TYPE_NETWORKINTERFACENAME,
+	TYPE_THREAD,
+	TYPE_THREADGROUP,
+	TYPE_CLASS,
+	TYPE_CLASSLOADER,
+	TYPE_METHOD,
+	TYPE_SYMBOL,
+	TYPE_THREADSTATE,
+	TYPE_GCNAME,
+	TYPE_GCCAUSE,
+	TYPE_GCWHEN,
+	TYPE_NARROWOOPMODE,
+	TYPE_MODULE,
+	TYPE_PACKAGE,
+	TYPE_STACKTRACE,
+	TYPE_FRAMETYPE,
+	TYPE_CHUNKHEADER,
+};
+#endif /* JAVA_SPEC_VERSION >= 17 */
 
 void
-VM_JFRChunkWriter::writeJFRHeader()
+VM_JFRChunkWriter::writeJFRHeader(U_8 *headerStart)
 {
-	_bufferWriter->setCursor(_jfrHeaderCursor);
+	_bufferWriter->setCursor(headerStart);
 
 	/* Magic number "FLR\0" in ASCII */
 	_bufferWriter->writeU32(0x464c5200); // 0
@@ -40,19 +168,19 @@ VM_JFRChunkWriter::writeJFRHeader()
 	_bufferWriter->writeU16(1);
 
 	/* chunk size */
-	_bufferWriter->writeU64(_bufferWriter->getSize()); // 8
+	_bufferWriter->writeU64(_vm->jfrState.lastGenerationFileCursor + _bufferWriter->getSize()); // 8
 
 	/* checkpoint offset */
-	_bufferWriter->writeU64(_bufferWriter->getFileOffsetFromStart(_checkPointEventOffset)); // 16
+	_bufferWriter->writeU64(_vm->jfrState.lastGenerationFileCursor + _bufferWriter->getFileOffsetFromStart(_checkPointEventOffset)); // 16
 
 	/* metadata offset */
-	_bufferWriter->writeU64(_bufferWriter->getFileOffsetFromStart(_metadataOffset)); // 24
+	_bufferWriter->writeU64(_vm->jfrState.lastGenerationFileCursor + _bufferWriter->getFileOffsetFromStart(_metadataOffset)); // 24
 
 	/* start time */
 	_bufferWriter->writeU64(_vm->jfrState.chunkStartTime); // 32
 
-	/* duration */
-	_bufferWriter->writeU64(0); // 40
+	/* duration in nanos */
+	_bufferWriter->writeU64(j9time_nano_time() - _vm->jfrState.chunkStartTicks); // 40
 
 	/* start ticks */
 	_bufferWriter->writeU64(_vm->jfrState.chunkStartTicks); // 48
@@ -61,7 +189,7 @@ VM_JFRChunkWriter::writeJFRHeader()
 	_bufferWriter->writeU64(1000000000); // 56
 
 	/* file state or generation */
-	_bufferWriter->writeU8(0); // 64 // TODO ???
+	_bufferWriter->writeU8(_finalWrite ? 0 : _vm->jfrState.chunkGeneration); // 64
 
 	/* pad */
 	_bufferWriter->writeU16(0); // 65
@@ -71,6 +199,37 @@ VM_JFRChunkWriter::writeJFRHeader()
 		flags |= JFR_HEADER_SPECIALFLAGS_LAST_CHUNK;
 	}
 	_bufferWriter->writeU8(flags);
+}
+
+U_8 *
+VM_JFRChunkWriter::writeCheckpointHeader()
+{
+	U_8 *dataStart = writeCheckpointEventHeader(FlushHeader, 1);
+
+	/* class ID */
+	_bufferWriter->writeLEB128(events->ChunkHeaderID);
+
+	/* entry count */
+	_bufferWriter->writeLEB128(1);
+
+	/* write index */
+	_bufferWriter->writeLEB128(1);
+
+	/* header length */
+	_bufferWriter->writeLEB128(VM_JFRChunkWriter::JFR_CHUNK_HEADER_SIZE);
+
+	_checkpointHeaderStart = _bufferWriter->getAndIncCursor(JFR_CHUNK_HEADER_SIZE);
+
+	/* The chunk header points to the last checkpoint event written. */
+	_checkPointEventOffset = dataStart;
+
+	/* write size */
+	writeEventSize(dataStart);
+
+	/* Write the header inside the checkpoint event, then the one at the start of the chunk. */
+	writeJFRHeader(_checkpointHeaderStart);
+
+	return dataStart;
 }
 
 U_8 *
@@ -135,16 +294,11 @@ VM_JFRChunkWriter::writeJFRMetadata()
 U_8 *
 VM_JFRChunkWriter::writeCheckpointEventHeader(CheckpointTypeMask typeMask, U_32 cpCount)
 {
-	/* write delta offset in previous checkpoint event */
-	if (NULL != _previousCheckpointDelta) {
-		_bufferWriter->writeLEB128PaddedU72(
-				_previousCheckpointDelta,
-				_bufferWriter->getFileOffset(_bufferWriter->getCursor(), _lastDataStart));
-	}
-
 	/* reserve size field */
 	U_8 *dataStart = reserveEventSize();
-	_lastDataStart = dataStart;
+
+	/* To account chunk spanning multiple generations. */
+	I_64 absoluteDataStart = _vm->jfrState.lastGenerationFileCursor + _bufferWriter->getFileOffsetFromStart(dataStart);
 
 	if (_debug) {
 		j9tty_printf(
@@ -162,17 +316,13 @@ VM_JFRChunkWriter::writeCheckpointEventHeader(CheckpointTypeMask typeMask, U_32 
 	/* duration */
 	_bufferWriter->writeLEB128((U_64)0);
 
-	/* reserve delta offset to next checkpoint event */
-	_previousCheckpointDelta = _bufferWriter->getCursor();
-	_bufferWriter->writeLEB128PaddedU72(0);
-
-	if (_debug) {
-		j9tty_printf(
-				PORTLIB,
-				"next pointer=0x%llX val=%llu\n",
-				_bufferWriter->getFileOffsetFromStart(_previousCheckpointDelta),
-				VM_BufferWriter::convertFromLEB128ToU64(_previousCheckpointDelta));
+	/* Write the negative delta offset to the previous checkpoint event, or 0 if there is none. */
+	U_64 deltaToPrevious = 0;
+	if (0 != _lastDataStart) {
+		deltaToPrevious = (U_64)(_lastDataStart - absoluteDataStart);
 	}
+	_bufferWriter->writeLEB128(deltaToPrevious);
+	_lastDataStart = absoluteDataStart;
 
 	/* type mask */
 	_bufferWriter->writeU8(typeMask);
@@ -215,10 +365,10 @@ VM_JFRChunkWriter::writeStringLiteral(const char *string)
 U_8 *
 VM_JFRChunkWriter::writeThreadStateCheckpointEvent()
 {
-	U_8 *dataStart = writeCheckpointEventHeader(Generic, 1);
+	U_8 *dataStart = writeCheckpointEventHeader(Statics, 1);
 
 	/* class ID */
-	_bufferWriter->writeLEB128(ThreadStateID);
+	_bufferWriter->writeLEB128(events->ThreadStateID);
 
 	/* number of states */
 	_bufferWriter->writeLEB128(THREADSTATE_COUNT);
@@ -253,7 +403,7 @@ VM_JFRChunkWriter::writePackageCheckpointEvent()
 		dataStart = writeCheckpointEventHeader(Generic, 1);
 
 		/* class ID */
-		_bufferWriter->writeLEB128(PackageID);
+		_bufferWriter->writeLEB128(events->PackageID);
 
 		/* number of states */
 		_bufferWriter->writeLEB128(_constantPoolTypes.getPackageCount());
@@ -264,7 +414,7 @@ VM_JFRChunkWriter::writePackageCheckpointEvent()
 			_bufferWriter->writeLEB128(entry->index);
 
 			/* name index */
-			_bufferWriter->writeLEB128(_constantPoolTypes.getStringUTF8Count() + entry->index);
+			_bufferWriter->writeLEB128(entry->symbolTableEntry);
 
 			/* module index */
 			_bufferWriter->writeLEB128(entry->moduleIndex);
@@ -291,7 +441,7 @@ VM_JFRChunkWriter::writeMethodCheckpointEvent()
 		dataStart = writeCheckpointEventHeader(Generic, 1);
 
 		/* class ID */
-		_bufferWriter->writeLEB128(MethodID);
+		_bufferWriter->writeLEB128(events->MethodID);
 
 		/* number of states */
 		_bufferWriter->writeLEB128(_constantPoolTypes.getMethodCount());
@@ -335,7 +485,7 @@ VM_JFRChunkWriter::writeClassloaderCheckpointEvent()
 		dataStart = writeCheckpointEventHeader(Generic, 1);
 
 		/* class ID */
-		_bufferWriter->writeLEB128(ClassLoaderID);
+		_bufferWriter->writeLEB128(events->ClassLoaderID);
 
 		/* number of states */
 		_bufferWriter->writeLEB128(_constantPoolTypes.getClassloaderCount());
@@ -370,7 +520,7 @@ VM_JFRChunkWriter:: writeClassCheckpointEvent()
 		dataStart = writeCheckpointEventHeader(Generic, 1);
 
 		/* class ID */
-		_bufferWriter->writeLEB128(ClassID);
+		_bufferWriter->writeLEB128(events->ClassID);
 
 		/* number of states */
 		_bufferWriter->writeLEB128(_constantPoolTypes.getClassCount());
@@ -414,7 +564,7 @@ VM_JFRChunkWriter::writeModuleCheckpointEvent()
 		dataStart = writeCheckpointEventHeader(Generic, 1);
 
 		/* class ID */
-		_bufferWriter->writeLEB128(ModuleID);
+		_bufferWriter->writeLEB128(events->ModuleID);
 
 		/* number of states */
 		_bufferWriter->writeLEB128(_constantPoolTypes.getModuleCount());
@@ -452,10 +602,10 @@ VM_JFRChunkWriter::writeThreadCheckpointEvent()
 	U_8 *dataStart = NULL;
 
 	if (_constantPoolTypes.getThreadCount() > 0) {
-		dataStart = writeCheckpointEventHeader(Generic, 1);
+		dataStart = writeCheckpointEventHeader(Thread, 1);
 
 		/* class ID */
-		_bufferWriter->writeLEB128(ThreadID);
+		_bufferWriter->writeLEB128(events->ThreadID);
 
 		/* number of states */
 		_bufferWriter->writeLEB128(_constantPoolTypes.getThreadCount());
@@ -499,7 +649,7 @@ VM_JFRChunkWriter::writeThreadGroupCheckpointEvent()
 		dataStart = writeCheckpointEventHeader(Generic, 1);
 
 		/* class ID */
-		_bufferWriter->writeLEB128(ThreadGroupID);
+		_bufferWriter->writeLEB128(events->ThreadGroupID);
 
 		/* number of states */
 		_bufferWriter->writeLEB128(_constantPoolTypes.getThreadGroupCount());
@@ -528,10 +678,10 @@ VM_JFRChunkWriter::writeThreadGroupCheckpointEvent()
 U_8 *
 VM_JFRChunkWriter::writeFrameTypeCheckpointEvent()
 {
-	U_8 *dataStart = writeCheckpointEventHeader(Generic, 1);
+	U_8 *dataStart = writeCheckpointEventHeader(Statics, 1);
 
 	/* class ID */
-	_bufferWriter->writeLEB128(FrameTypeID);
+	_bufferWriter->writeLEB128(events->FrameTypeID);
 
 	/* number of states */
 	_bufferWriter->writeLEB128(FrameTypeCount);
@@ -570,29 +720,64 @@ VM_JFRChunkWriter::writeSymbolTableCheckpointEvent()
 {
 	U_8 *dataStart = NULL;
 
-	if (_constantPoolTypes.getPackageCount() > 0) {
+	if (_constantPoolTypes.getSymbolTableCount() > 0) {
+		UDATA globalStringTableCount = _vm->jfrState.checkpointEventTables.globalStringTableCount;
 		dataStart = writeCheckpointEventHeader(Generic, 1);
 
 		/* class ID */
-		_bufferWriter->writeLEB128(SymbolID);
+		_bufferWriter->writeLEB128(events->SymbolID);
 
 		/* number of states */
 		UDATA stringCount = _constantPoolTypes.getStringUTF8Count();
 		UDATA packageCount = _constantPoolTypes.getPackageCount();
-		_bufferWriter->writeLEB128(stringCount + packageCount);
+		UDATA symbolCount = stringCount + packageCount;
+		if (0 == globalStringTableCount) {
+			/* The default package is counted in both stringCount and packageCount but is written once. */
+			symbolCount -= 1;
+		}
+		_bufferWriter->writeLEB128(symbolCount);
 
-		for (UDATA i = 0; i < stringCount; i++) {
-			StringUTF8Entry *stringEntry = (StringUTF8Entry*)_constantPoolTypes.getSymbolTableEntry(i);
+		if (0 == globalStringTableCount) {
+			_bufferWriter->writeLEB128(0);
+			writeUTF8String(((StringUTF8Entry *)_constantPoolTypes.getSymbolTableEntry(0))->string);
+			_bufferWriter->writeLEB128(1);
+			writeUTF8String(((StringUTF8Entry *)_constantPoolTypes.getSymbolTableEntry(1))->string);
+			_bufferWriter->writeLEB128(2);
+			writeUTF8String(((StringUTF8Entry *)_constantPoolTypes.getSymbolTableEntry(2))->string);
+			_bufferWriter->writeLEB128(3);
+			writeUTF8String(((StringUTF8Entry *)_constantPoolTypes.getSymbolTableEntry(3))->string);
+			_bufferWriter->writeLEB128(4);
+			PackageEntry *defaultPackage = ((PackageEntry *)_constantPoolTypes.getSymbolTableEntry(4));
+			writeUTF8String(defaultPackage->packageName, defaultPackage->packageNameLength);
 
-			/* write index */
-			_bufferWriter->writeLEB128(i);
+			for (UDATA i = 5; i < stringCount; i++) {
+				StringUTF8Entry *stringEntry = (StringUTF8Entry *)_constantPoolTypes.getSymbolTableEntry(i);
 
-			/* write string */
-			writeUTF8String(stringEntry->string);
+				/* write index */
+				_bufferWriter->writeLEB128(i);
+
+				/* write string */
+				writeUTF8String(stringEntry->string);
+			}
+		} else {
+			for (UDATA i = globalStringTableCount; i < (globalStringTableCount + stringCount); i++) {
+				StringUTF8Entry *stringEntry = (StringUTF8Entry *)_constantPoolTypes.getSymbolTableEntry(i);
+
+				/* write index */
+				_bufferWriter->writeLEB128(i);
+
+				/* write string */
+				writeUTF8String(stringEntry->string);
+			}
 		}
 
-		for (UDATA i = stringCount; i < (stringCount + packageCount); i++) {
-			PackageEntry *packageEntry = (PackageEntry*)_constantPoolTypes.getSymbolTableEntry(i);
+		UDATA packageLimit = stringCount + packageCount;
+		if (0 == globalStringTableCount) {
+			packageLimit -= 1;
+		}
+
+		for (UDATA i = globalStringTableCount + stringCount; i < (globalStringTableCount + packageLimit); i++) {
+			PackageEntry *packageEntry = (PackageEntry *)_constantPoolTypes.getSymbolTableEntry(i);
 
 			/* write index */
 			_bufferWriter->writeLEB128(i);
@@ -617,7 +802,7 @@ VM_JFRChunkWriter::writeStacktraceCheckpointEvent()
 		dataStart = writeCheckpointEventHeader(Generic, 1);
 
 		/* class ID */
-		_bufferWriter->writeLEB128(StackTraceID);
+		_bufferWriter->writeLEB128(events->StackTraceID);
 
 		/* number of states */
 		_bufferWriter->writeLEB128(_constantPoolTypes.getStackTraceCount());
@@ -669,7 +854,7 @@ VM_JFRChunkWriter::writeNetworkInterfaceNameCheckpointEvent()
 		dataStart = writeCheckpointEventHeader(Generic, 1);
 
 		/* Write class ID. */
-		_bufferWriter->writeLEB128(NetworkInterfaceNameID);
+		_bufferWriter->writeLEB128(events->NetworkInterfaceNameID);
 
 		/* Write number of entries. */
 		_bufferWriter->writeLEB128(_constantPoolTypes.getNetworkInterfaceNameCount());
@@ -700,7 +885,7 @@ VM_JFRChunkWriter::writeJVMInformationEvent()
 	U_8 *dataStart = reserveEventSize();
 
 	/* write event type */
-	_bufferWriter->writeLEB128(JVMInformationID);
+	_bufferWriter->writeLEB128(events->JVMInformationID);
 
 	/* write start time */
 	_bufferWriter->writeLEB128(j9time_nano_time());
@@ -738,7 +923,7 @@ VM_JFRChunkWriter::writePhysicalMemoryEvent()
 	/* reserve size field */
 	U_8 *dataStart = reserveEventSize();
 
-	_bufferWriter->writeLEB128(PhysicalMemoryID);
+	_bufferWriter->writeLEB128(events->PhysicalMemoryID);
 
 	/* write start time */
 	_bufferWriter->writeLEB128(j9time_nano_time());
@@ -768,7 +953,7 @@ VM_JFRChunkWriter::writeCPUInformationEvent()
 	U_8 *dataStart = reserveEventSize();
 
 	/* write event type */
-	_bufferWriter->writeLEB128(CPUInformationID);
+	_bufferWriter->writeLEB128(events->CPUInformationID);
 
 	/* write start time */
 	_bufferWriter->writeLEB128(j9time_nano_time());
@@ -803,7 +988,7 @@ VM_JFRChunkWriter::writeVirtualizationInformationEvent()
 	U_8 *dataStart = reserveEventSize();
 
 	/* write event type */
-	_bufferWriter->writeLEB128(VirtualizationInformationID);
+	_bufferWriter->writeLEB128(events->VirtualizationInformationID);
 
 	/* write start time */
 	_bufferWriter->writeLEB128(j9time_nano_time());
@@ -826,7 +1011,7 @@ VM_JFRChunkWriter::writeOSInformationEvent()
 	U_8 *dataStart = reserveEventSize();
 
 	/* write event type */
-	_bufferWriter->writeLEB128(OSInformationID);
+	_bufferWriter->writeLEB128(events->OSInformationID);
 
 	/* write start time */
 	_bufferWriter->writeLEB128(j9time_nano_time());
@@ -843,10 +1028,10 @@ VM_JFRChunkWriter::writeOSInformationEvent()
 void
 VM_JFRChunkWriter::writeNarrowOOPModeTypesEvent()
 {
-	U_8 *dataStart = writeCheckpointEventHeader(Generic, 1);
+	U_8 *dataStart = writeCheckpointEventHeader(Statics, 1);
 
 	/* class ID */
-	_bufferWriter->writeLEB128(NarrowOopModesID);
+	_bufferWriter->writeLEB128(events->NarrowOopModesID);
 
 	/* number of states */
 	_bufferWriter->writeLEB128(OOPModeTypeCount);
@@ -866,10 +1051,10 @@ VM_JFRChunkWriter::writeNarrowOOPModeTypesEvent()
 void
 VM_JFRChunkWriter::writeGCNameTypesEvent()
 {
-	U_8 *dataStart = writeCheckpointEventHeader(Generic, 1);
+	U_8 *dataStart = writeCheckpointEventHeader(Statics, 1);
 
 	/* class ID */
-	_bufferWriter->writeLEB128(GCNamesID);
+	_bufferWriter->writeLEB128(events->GCNamesID);
 
 	/* number of states */
 	_bufferWriter->writeLEB128(GCNameTypeCount);
@@ -889,10 +1074,10 @@ VM_JFRChunkWriter::writeGCNameTypesEvent()
 void
 VM_JFRChunkWriter::writeGCCauseTypesEvent()
 {
-	U_8 *dataStart = writeCheckpointEventHeader(Generic, 1);
+	U_8 *dataStart = writeCheckpointEventHeader(Statics, 1);
 
 	/* class ID */
-	_bufferWriter->writeLEB128(GCCausesID);
+	_bufferWriter->writeLEB128(events->GCCausesID);
 
 	/* number of states */
 	_bufferWriter->writeLEB128(GCCauseTypeCount);
@@ -912,10 +1097,10 @@ VM_JFRChunkWriter::writeGCCauseTypesEvent()
 void
 VM_JFRChunkWriter::writeGCWhenTypesEvent()
 {
-	U_8 *dataStart = writeCheckpointEventHeader(Generic, 1);
+	U_8 *dataStart = writeCheckpointEventHeader(Statics, 1);
 
 	/* class ID */
-	_bufferWriter->writeLEB128(GCWhensID);
+	_bufferWriter->writeLEB128(events->GCWhensID);
 
 	/* number of states */
 	_bufferWriter->writeLEB128(GCWhenTypeCount);
@@ -941,7 +1126,7 @@ VM_JFRChunkWriter::writeGCHeapConfigurationEvent()
 	U_8 *dataStart = reserveEventSize();
 
 	/* write event type */
-	_bufferWriter->writeLEB128(GCHeapConfigID);
+	_bufferWriter->writeLEB128(events->GCHeapConfigID);
 
 	/* write event start time */
 	_bufferWriter->writeLEB128(j9time_nano_time());
@@ -980,7 +1165,7 @@ VM_JFRChunkWriter::writeYoungGenerationConfigurationEvent()
 	U_8 *dataStart = reserveEventSize();
 
 	/* write event type */
-	_bufferWriter->writeLEB128(YoungGenerationConfigID);
+	_bufferWriter->writeLEB128(events->YoungGenerationConfigID);
 
 	/* write event start time */
 	_bufferWriter->writeLEB128(j9time_nano_time());
@@ -999,6 +1184,33 @@ VM_JFRChunkWriter::writeYoungGenerationConfigurationEvent()
 }
 
 void
+VM_JFRChunkWriter::writeGCTLABConfigurationEvent()
+{
+	GCTLABConfigurationEntry *tlabConfig = &(VM_JFRConstantPoolTypes::getJFRConstantEvents(_vm)->GCTLABConfigEntry);
+
+	/* reserve size field */
+	U_8 *dataStart = reserveEventSize();
+
+	/* write event type */
+	_bufferWriter->writeLEB128(events->GCTLABConfigurationID);
+
+	/* write event start time */
+	_bufferWriter->writeLEB128(j9time_nano_time());
+
+	/* write whether TLABs are in use */
+	_bufferWriter->writeBoolean(tlabConfig->usesTLABs);
+
+	/* write minimum TLAB size */
+	_bufferWriter->writeLEB128(tlabConfig->minTLABSize);
+
+	/* write TLAB refill waste limit */
+	_bufferWriter->writeLEB128(tlabConfig->tlabRefillWasteLimit);
+
+	/* write event size */
+	writeEventSize(dataStart);
+}
+
+void
 VM_JFRChunkWriter::writeGCConfigurationEvent()
 {
 	GCConfigurationEntry *gcConfig = &(VM_JFRConstantPoolTypes::getJFRConstantEvents(_vm)->GCConfigEntry);
@@ -1007,7 +1219,7 @@ VM_JFRChunkWriter::writeGCConfigurationEvent()
 	U_8 *dataStart = reserveEventSize();
 
 	/* write event type */
-	_bufferWriter->writeLEB128(GCConfigurationID);
+	_bufferWriter->writeLEB128(events->GCConfigurationID);
 
 	/* write event start time */
 	_bufferWriter->writeLEB128(j9time_nano_time());
@@ -1046,6 +1258,30 @@ VM_JFRChunkWriter::writeGCConfigurationEvent()
 }
 
 void
+VM_JFRChunkWriter::writeGCSurvivorConfigurationEvent()
+{
+	GCSurvivorConfigurationEntry *survivorConfig = &(VM_JFRConstantPoolTypes::getJFRConstantEvents(_vm)->GCSurvivorConfigEntry);
+
+	/* reserve size field */
+	U_8 *dataStart = reserveEventSize();
+
+	/* write event type */
+	_bufferWriter->writeLEB128(events->GCSurvivorConfigurationID);
+
+	/* write event start time */
+	_bufferWriter->writeLEB128(j9time_nano_time());
+
+	/* write maximum tenuring threshold */
+	_bufferWriter->writeLEB128(survivorConfig->maxTenuringThreshold);
+
+	/* write initial tenuring threshold */
+	_bufferWriter->writeLEB128(survivorConfig->initialTenuringThreshold);
+
+	/* write event size */
+	writeEventSize(dataStart);
+}
+
+void
 VM_JFRChunkWriter::writeInitialSystemPropertyEvents(J9JavaVM *vm)
 {
 	pool_state walkState;
@@ -1056,7 +1292,7 @@ VM_JFRChunkWriter::writeInitialSystemPropertyEvents(J9JavaVM *vm)
 		U_8 *dataStart = reserveEventSize();
 
 		/* write event type */
-		_bufferWriter->writeLEB128(InitialSystemPropertyID);
+		_bufferWriter->writeLEB128(events->InitialSystemPropertyID);
 
 		/* write start time */
 		_bufferWriter->writeLEB128(j9time_nano_time());
@@ -1102,7 +1338,7 @@ VM_JFRChunkWriter::writeInitialEnvironmentVariableEvents()
 						const char *equalChar = strchr(envElement.nameAndValue, '=');
 
 						/* write event type */
-						_bufferWriter->writeLEB128(InitialEnvironmentVariableID);
+						_bufferWriter->writeLEB128(events->InitialEnvironmentVariableID);
 
 						/* write start time */
 						_bufferWriter->writeLEB128(j9time_nano_time());
@@ -1126,14 +1362,15 @@ VM_JFRChunkWriter::writeInitialEnvironmentVariableEvents()
 void
 VM_JFRChunkWriter::writeClassLoadingStatisticsEvent(void *anElement, void *userData)
 {
-	ClassLoadingStatisticsEntry *entry = (ClassLoadingStatisticsEntry  *)anElement;
-	VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+	ClassLoadingStatisticsEntry *entry = (ClassLoadingStatisticsEntry *)anElement;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 	/* reserve size field */
-	U_8 *dataStart = reserveEventSize(_bufferWriter );
+	U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 	/* write event type */
-	_bufferWriter->writeLEB128(ClassLoadingStatisticsID);
+	_bufferWriter->writeLEB128(writer->events->ClassLoadingStatisticsID);
 
 	/* write start time */
 	_bufferWriter->writeLEB128(entry->ticks);
@@ -1152,13 +1389,14 @@ void
 VM_JFRChunkWriter::writeClassLoaderStatisticsEvent(void *anElement, void *userData)
 {
 	ClassLoaderStatisticsEntry *entry = (ClassLoaderStatisticsEntry *)anElement;
-	VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 	/* reserve size field */
 	U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 	/* write event type */
-	_bufferWriter->writeLEB128(ClassLoaderStatisticsID);
+	_bufferWriter->writeLEB128(writer->events->ClassLoaderStatisticsID);
 
 	/* write start time */
 	_bufferWriter->writeLEB128(entry->ticks);
@@ -1202,13 +1440,14 @@ void
 VM_JFRChunkWriter::writeThreadAllocationStatisticsEvent(void *anElement, void *userData)
 {
 	ThreadAllocationStatisticsEntry *entry = (ThreadAllocationStatisticsEntry *)anElement;
-	VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 	/* reserve size field */
 	U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 	/* write event type */
-	_bufferWriter->writeLEB128(ThreadAllocationStatisticsID);
+	_bufferWriter->writeLEB128(writer->events->ThreadAllocationStatisticsID);
 
 	/* write start time */
 	_bufferWriter->writeLEB128(entry->ticks);
@@ -1227,13 +1466,14 @@ void
 VM_JFRChunkWriter::writeThreadContextSwitchRateEvent(void *anElement, void *userData)
 {
 	ThreadContextSwitchRateEntry *entry = (ThreadContextSwitchRateEntry *)anElement;
-	VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 	/* reserve size field */
 	U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 	/* write event type */
-	_bufferWriter->writeLEB128(ThreadContextSwitchRateID);
+	_bufferWriter->writeLEB128(writer->events->ThreadContextSwitchRateID);
 
 	/* write start time */
 	_bufferWriter->writeLEB128(entry->ticks);
@@ -1249,13 +1489,14 @@ void
 VM_JFRChunkWriter::writeThreadStatisticsEvent(void *anElement, void *userData)
 {
 	ThreadStatisticsEntry *entry = (ThreadStatisticsEntry *)anElement;
-	VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 	/* reserve event size */
 	U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 	/* write event type */
-	_bufferWriter->writeLEB128(ThreadStatisticsID);
+	_bufferWriter->writeLEB128(writer->events->ThreadStatisticsID);
 
 	/* write start ticks */
 	_bufferWriter->writeLEB128(entry->ticks);
@@ -1288,7 +1529,7 @@ VM_JFRChunkWriter::writeNativeLibraryEvent(void *anElement, void *userData)
 	U_8 *dataStart = writer->reserveEventSize(bufferWriter);
 
 	/* write event type */
-	bufferWriter->writeLEB128(NativeLibraryID);
+	bufferWriter->writeLEB128(writer->events->NativeLibraryID);
 
 	/* write start time */
 	bufferWriter->writeLEB128(entry->ticks);
@@ -1320,7 +1561,7 @@ VM_JFRChunkWriter::writeThreadDumpEvent(void *anElement, void *userData)
 	/* Reserve size field. */
 	U_8 *dataStart = reserveEventSize(bufferWriter);
 
-	bufferWriter->writeLEB128(ThreadDumpID);
+	bufferWriter->writeLEB128(writer->events->ThreadDumpID);
 
 	/* Write start time. */
 	bufferWriter->writeLEB128(entry->ticks);
@@ -1359,7 +1600,7 @@ VM_JFRChunkWriter::writeSystemProcessEvent(void *anElement, void *userData)
 	U_8 *dataStart = writer->reserveEventSize(bufferWriter);
 
 	/* Write event type. */
-	bufferWriter->writeLEB128(SystemProcessID);
+	bufferWriter->writeLEB128(writer->events->SystemProcessID);
 
 	/* Write start time. */
 	bufferWriter->writeLEB128(entry->ticks);
@@ -1384,13 +1625,14 @@ void
 VM_JFRChunkWriter::writeSystemGCEvent(void *anElement, void *userData)
 {
 	SystemGCEntry *entry = (SystemGCEntry *)anElement;
-	VM_BufferWriter *bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *bufferWriter = writer->_bufferWriter;
 
 	/* Reserve size field */
 	U_8 *dataStart = reserveEventSize(bufferWriter);
 
 	/* Write event type */
-	bufferWriter->writeLEB128(SystemGCID);
+	bufferWriter->writeLEB128(writer->events->SystemGCID);
 
 	/* Write start time */
 	bufferWriter->writeLEB128(entry->ticks);
@@ -1415,13 +1657,14 @@ void
 VM_JFRChunkWriter::writeOldGarbageCollectionEvent(void *anElement, void *userData)
 {
 	OldGarbageCollectionEntry *entry = (OldGarbageCollectionEntry *)anElement;
-	VM_BufferWriter *bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *bufferWriter = writer->_bufferWriter;
 
 	/* Reserve size field */
 	U_8 *dataStart = reserveEventSize(bufferWriter);
 
 	/* Write event type */
-	bufferWriter->writeLEB128(OldGarbageCollectionID);
+	bufferWriter->writeLEB128(writer->events->OldGarbageCollectionID);
 
 	/* Write start time */
 	bufferWriter->writeLEB128(entry->ticks);
@@ -1440,13 +1683,14 @@ void
 VM_JFRChunkWriter::writeYoungGarbageCollectionEvent(void *anElement, void *userData)
 {
 	YoungGarbageCollectionEntry *entry = (YoungGarbageCollectionEntry *)anElement;
-	VM_BufferWriter *bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *bufferWriter = writer->_bufferWriter;
 
 	/* Reserve size field */
 	U_8 *dataStart = reserveEventSize(bufferWriter);
 
 	/* Write event type */
-	bufferWriter->writeLEB128(YoungGarbageCollectionID);
+	bufferWriter->writeLEB128(writer->events->YoungGarbageCollectionID);
 
 	/* Write start time */
 	bufferWriter->writeLEB128(entry->ticks);
@@ -1468,13 +1712,14 @@ void
 VM_JFRChunkWriter::writeGarbageCollectionEvent(void *anElement, void *userData)
 {
 	GarbageCollectionEntry *entry = (GarbageCollectionEntry *)anElement;
-	VM_BufferWriter *bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *bufferWriter = writer->_bufferWriter;
 
 	/* Reserve size field */
 	U_8 *dataStart = reserveEventSize(bufferWriter);
 
 	/* Write event type */
-	bufferWriter->writeLEB128(GarbageCollectionID);
+	bufferWriter->writeLEB128(writer->events->GarbageCollectionID);
 
 	/* Write start time */
 	bufferWriter->writeLEB128(entry->ticks);
@@ -1505,13 +1750,14 @@ void
 VM_JFRChunkWriter::writeGCHeapSummaryEvent(void *anElement, void *userData)
 {
 	GCHeapSummaryEntry *entry = (GCHeapSummaryEntry *)anElement;
-	VM_BufferWriter *bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *bufferWriter = writer->_bufferWriter;
 
 	/* Reserve size field */
 	U_8 *dataStart = reserveEventSize(bufferWriter);
 
 	/* Write event type */
-	bufferWriter->writeLEB128(GCHeapSummaryID);
+	bufferWriter->writeLEB128(writer->events->GCHeapSummaryID);
 
 	/* Write start time */
 	bufferWriter->writeLEB128(entry->ticks);
@@ -1540,14 +1786,14 @@ void
 VM_JFRChunkWriter::writeNetworkUtilizationEvent(void *anElement, void *userData)
 {
 	NetworkUtilizationEntry *entry = (NetworkUtilizationEntry *)anElement;
-	VM_JFRChunkWriter *chunkWriter = (VM_JFRChunkWriter  *)userData;
-	VM_BufferWriter *bufferWriter = chunkWriter->_bufferWriter;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *bufferWriter = writer->_bufferWriter;
 
 	/* Reserve size field. */
 	U_8 *dataStart = reserveEventSize(bufferWriter);
 
 	/* Write event type. */
-	bufferWriter->writeLEB128(NetworkUtilizationID);
+	bufferWriter->writeLEB128(writer->events->NetworkUtilizationID);
 
 	/* Write start time. */
 	bufferWriter->writeLEB128(entry->ticks);
@@ -1569,13 +1815,14 @@ void
 VM_JFRChunkWriter::writeDataLossEvent(void *anElement, void *userData)
 {
 	DataLossEntry *entry = (DataLossEntry *)anElement;
-	VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 	/* Reserve size field. */
 	U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 	/* Write event type. */
-	_bufferWriter->writeLEB128(DataLossID);
+	_bufferWriter->writeLEB128(writer->events->DataLossID);
 
 	/* Write start time. */
 	_bufferWriter->writeLEB128(entry->ticks);
@@ -1594,13 +1841,14 @@ void
 VM_JFRChunkWriter::writeModuleRequire(void *anElement, void *userData)
 {
 	ModuleRequireEntry *entry = (ModuleRequireEntry *)anElement;
-	VM_BufferWriter *bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *bufferWriter = writer->_bufferWriter;
 
 	/* Reserve size field */
 	U_8 *dataStart = reserveEventSize(bufferWriter);
 
 	/* Write event type */
-	bufferWriter->writeLEB128(ModuleRequireID);
+	bufferWriter->writeLEB128(writer->events->ModuleRequireID);
 
 	/* Write start time */
 	bufferWriter->writeLEB128(entry->ticks);
@@ -1619,13 +1867,14 @@ void
 VM_JFRChunkWriter::writeModuleExport(void *anElement, void *userData)
 {
 	ModuleExportEntry *entry = (ModuleExportEntry *)anElement;
-	VM_BufferWriter *bufferWriter = (VM_BufferWriter *)userData;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *bufferWriter = writer->_bufferWriter;
 
 	/* Reserve size field. */
 	U_8 *dataStart = reserveEventSize(bufferWriter);
 
 	/* Write event type. */
-	bufferWriter->writeLEB128(ModuleExportID);
+	bufferWriter->writeLEB128(writer->events->ModuleExportID);
 
 	/* Write start time. */
 	bufferWriter->writeLEB128(entry->ticks);
@@ -1640,4 +1889,33 @@ VM_JFRChunkWriter::writeModuleExport(void *anElement, void *userData)
 	writeEventSize(bufferWriter, dataStart);
 }
 
+void
+VM_JFRChunkWriter::writeObjectAllocationSampleEvent(void *anElement, void *userData)
+{
+	ObjectAllocationSampleEntry *entry = (ObjectAllocationSampleEntry *)anElement;
+	VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+	VM_BufferWriter *bufferWriter = writer->_bufferWriter;
+
+	/* Reserve size field. */
+	U_8 *dataStart = reserveEventSize(bufferWriter);
+
+	/* Write event type. */
+	bufferWriter->writeLEB128(writer->events->ObjectAllocationSampleID);
+
+	/* Write start time. */
+	bufferWriter->writeLEB128(entry->ticks);
+
+	bufferWriter->writeLEB128(entry->eventThreadIndex);
+
+	bufferWriter->writeLEB128(entry->stackTraceIndex);
+
+	/* Write objectClass constant-pool index. */
+	bufferWriter->writeLEB128(entry->objectClassIndex);
+
+	/* Write weight (bytes allocated since last sample). */
+	bufferWriter->writeLEB128(entry->weight);
+
+	/* Write event size. */
+	writeEventSize(bufferWriter, dataStart);
+}
 #endif /* defined(J9VM_OPT_JFR) */

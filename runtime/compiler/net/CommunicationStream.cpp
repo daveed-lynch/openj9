@@ -97,6 +97,13 @@ void CommunicationStream::readMessage(Message &msg)
         throw JITServer::StreamFailure("JITServer I/O error: read more than the message size");
     }
 
+    // Safety check: make sure that the advertised message size is sensible.
+    // A very large value would make the server allocate a lot of memory.
+    if (serializedSize > (1 << 30)) {
+        throw JITServer::StreamFailure(
+            "JITServer detected a malformed message: message size cannot be larger than 1 GB");
+    }
+
     // serializedSize >= bytesRead
     uint32_t bytesLeftToRead = serializedSize - bytesRead;
 
@@ -116,6 +123,12 @@ void CommunicationStream::readMessage(Message &msg)
 
     // rebuild the message
     msg.deserialize();
+
+    // Validate the message type before using it as an array index.
+    // The type field is read from the wire and must be a known value.
+    if (msg.type() >= MessageType::MessageType_MAXTYPE) {
+        throw JITServer::StreamFailure("JITServer detected an invalid message type");
+    }
 
     // Update message count and size statistics
     _msgTypeCount[msg.type()] += 1;

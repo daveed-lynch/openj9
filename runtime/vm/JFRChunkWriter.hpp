@@ -88,63 +88,6 @@ enum StringEnconding {
 	Latin1,
 };
 
-enum MetadataTypeID {
-	ThreadStartID = 2,
-	ThreadEndID = 3,
-	ThreadSleepID = 4,
-	ThreadParkID = 5,
-	MonitorEnterID = 6,
-	MonitorWaitID = 7,
-	GCHeapSummaryID = 27,
-	GarbageCollectionID = 35,
-	SystemGCID = 36,
-	YoungGarbageCollectionID = 38,
-	OldGarbageCollectionID = 39,
-	JVMInformationID = 87,
-	OSInformationID = 88,
-	VirtualizationInformationID = 89,
-	InitialSystemPropertyID = 90,
-	InitialEnvironmentVariableID = 91,
-	SystemProcessID = 92,
-	CPUInformationID = 93,
-	CPULoadID = 95,
-	ThreadCPULoadID = 96,
-	ThreadContextSwitchRateID = 97,
-	NetworkUtilizationID = 98,
-	ThreadStatisticsID = 99,
-	DataLossID = 86,
-	ClassLoadingStatisticsID = 100,
-	ClassLoaderStatisticsID = 101,
-	ThreadAllocationStatisticsID = 107,
-	PhysicalMemoryID = 108,
-	ExecutionSampleID = 109,
-	ThreadDumpID = 111,
-	NativeLibraryID = 112,
-	ModuleRequireID = 113,
-	ModuleExportID = 114,
-	GCConfigurationID = 130,
-	GCHeapConfigID = 133,
-	YoungGenerationConfigID = 134,
-	VirtualSpaceID = 149,
-	NetworkInterfaceNameID = 163,
-	ThreadID = 164,
-	ThreadGroupID = 165,
-	ClassID = 166,
-	ClassLoaderID = 167,
-	MethodID = 168,
-	SymbolID = 169,
-	ThreadStateID = 170,
-	GCNamesID = 171,
-	GCCausesID = 172,
-	GCWhensID = 173,
-	NarrowOopModesID = 180,
-	ModuleID = 186,
-	PackageID = 187,
-	StackTraceID = 188,
-	FrameTypeID = 189,
-	StackFrameID = 197,
-};
-
 enum ReservedEvent {
 	EventMetadata = 0,
 	EventCheckpoint,
@@ -154,6 +97,7 @@ enum CheckpointTypeMask {
 	Generic = 0,
 	Flush = 1,
 	ChunkHeader = 2,
+	FlushHeader = 3,
 	Statics = 4,
 	Thread = 8,
 };
@@ -163,6 +107,65 @@ class VM_JFRChunkWriter {
 	 * Data members
 	 */
 private:
+	struct EventIds {
+		int ThreadStartID;
+		int ThreadEndID;
+		int ThreadSleepID;
+		int ThreadParkID;
+		int MonitorEnterID;
+		int MonitorWaitID;
+		int GCHeapSummaryID;
+		int GarbageCollectionID;
+		int SystemGCID;
+		int YoungGarbageCollectionID;
+		int OldGarbageCollectionID;
+		int ObjectAllocationSampleID;
+		int JVMInformationID;
+		int OSInformationID;
+		int VirtualizationInformationID;
+		int InitialSystemPropertyID;
+		int InitialEnvironmentVariableID;
+		int SystemProcessID;
+		int CPUInformationID;
+		int CPULoadID;
+		int ThreadCPULoadID;
+		int ThreadContextSwitchRateID;
+		int NetworkUtilizationID;
+		int ThreadStatisticsID;
+		int DataLossID;
+		int ClassLoadingStatisticsID;
+		int ClassLoaderStatisticsID;
+		int ThreadAllocationStatisticsID;
+		int PhysicalMemoryID;
+		int ExecutionSampleID;
+		int ThreadDumpID;
+		int NativeLibraryID;
+		int ModuleRequireID;
+		int ModuleExportID;
+		int GCConfigurationID;
+		int GCSurvivorConfigurationID;
+		int GCTLABConfigurationID;
+		int GCHeapConfigID;
+		int YoungGenerationConfigID;
+		int NetworkInterfaceNameID;
+		int ThreadID;
+		int ThreadGroupID;
+		int ClassID;
+		int ClassLoaderID;
+		int MethodID;
+		int SymbolID;
+		int ThreadStateID;
+		int GCNamesID;
+		int GCCausesID;
+		int GCWhensID;
+		int NarrowOopModesID;
+		int ModuleID;
+		int PackageID;
+		int StackTraceID;
+		int FrameTypeID;
+		int ChunkHeaderID;
+	};
+
 	J9VMThread *_currentThread;
 	J9JavaVM *_vm;
 	JfrBuildResult _buildResult;
@@ -179,12 +182,13 @@ private:
 	StackTraceEntry *_firstStackTraceEntry;
 	U_32 _currentFrameCount;
 	void **_globalStringTable;
-	U_8 *_jfrHeaderCursor;
 	VM_BufferWriter *_bufferWriter;
 	U_8 *_metadataOffset;
 	U_8 *_checkPointEventOffset;
-	U_8 *_previousCheckpointDelta;
-	U_8 *_lastDataStart;
+	/* Absolute file offset of the last checkpoint event written, or 0 if there is none. */
+	I_64 _lastDataStart;
+	U_8 *_checkpointHeaderStart;
+	bool _isJFRv2;
 
 	static constexpr int STRING_BUFFER_LENGTH = 128;
 	/* JFR CHUNK Header size */
@@ -243,9 +247,19 @@ private:
 	static constexpr int NETWORK_UTILIZATION_EVENT_SIZE = (4 * sizeof(U_64)) + sizeof(U_32);
 	static constexpr int DATA_LOSS_EVENT_SIZE = sizeof(U_8) + LEB128_32_SIZE + (3 * LEB128_64_SIZE);
 	static constexpr int THREAD_ALLOCATION_STATISTICS_EVENT_SIZE = sizeof(U_8) + LEB128_32_SIZE + (3 * LEB128_64_SIZE);
+	static constexpr int OBJECT_ALLOCATION_SAMPLE_EVENT_SIZE = (4 * LEB128_64_SIZE) + (3 * LEB128_32_SIZE);
 	static constexpr int GC_CONFIGURATION_EVENT_SIZE = (3 * LEB128_64_SIZE) + (6 * LEB128_32_SIZE) + (3 * sizeof(U_8));
+	static constexpr int GC_SURVIVOR_CONFIGURATION_EVENT_SIZE = (2 * LEB128_64_SIZE) + (3 * LEB128_32_SIZE);
+	static constexpr int GC_TLAB_CONFIGURATION_EVENT_SIZE = sizeof(U_8) + (4 * LEB128_64_SIZE) + LEB128_32_SIZE;
 
 	static constexpr int METADATA_ID = 1;
+
+	const EventIds * const events;
+
+	static const EventIds v1Events;
+#if JAVA_SPEC_VERSION >= 17
+	static const EventIds v2Events;
+#endif /* JAVA_SPEC_VERSION >= 17 */
 
 protected:
 
@@ -288,6 +302,188 @@ private:
 				bufferWriter->getCursor() - eventStart);
 	}
 
+	void writeStaticCheckpointEvents()
+	{
+		writeThreadStateCheckpointEvent();
+
+		writeFrameTypeCheckpointEvent();
+
+		writeNarrowOOPModeTypesEvent();
+
+		writeGCNameTypesEvent();
+
+		writeGCCauseTypesEvent();
+
+		writeGCWhenTypesEvent();
+	}
+
+	void writeDynamicCheckpointEvents()
+	{
+		writeThreadCheckpointEvent();
+
+		writeThreadGroupCheckpointEvent();
+
+		writeSymbolTableCheckpointEvent();
+
+		writeModuleCheckpointEvent();
+
+		writeClassloaderCheckpointEvent();
+
+		writeClassCheckpointEvent();
+
+		writePackageCheckpointEvent();
+
+		writeMethodCheckpointEvent();
+
+		writeStacktraceCheckpointEvent();
+
+		writeNetworkInterfaceNameCheckpointEvent();
+	}
+
+	void writeCheckpointEvents()
+	{
+		writeStaticCheckpointEvents();
+
+		writeDynamicCheckpointEvents();
+
+		/* The chunk header points to the last checkpoint event written, which is the head of the reverse linked list. */
+		_checkPointEventOffset = _bufferWriter->getBufferStart() + (_lastDataStart - (I_64)_vm->jfrState.lastGenerationFileCursor);
+	}
+
+	void writeEvents()
+	{
+		pool_do(_constantPoolTypes.getExecutionSampleTable(), &writeExecutionSampleEvent, this);
+
+		pool_do(_constantPoolTypes.getThreadStartTable(), &writeThreadStartEvent, this);
+
+		pool_do(_constantPoolTypes.getThreadEndTable(), &writeThreadEndEvent, this);
+
+		pool_do(_constantPoolTypes.getThreadSleepTable(), &writeThreadSleepEvent, this);
+
+		pool_do(_constantPoolTypes.getMonitorWaitTable(), &writeMonitorWaitEvent, this);
+
+		pool_do(_constantPoolTypes.getMonitorEnterTable(), &writeMonitorEnterEvent, this);
+
+		pool_do(_constantPoolTypes.getThreadParkTable(), &writeThreadParkEvent, this);
+
+		pool_do(_constantPoolTypes.getCPULoadTable(), &writeCPULoadEvent, this);
+
+		pool_do(_constantPoolTypes.getThreadCPULoadTable(), &writeThreadCPULoadEvent, this);
+
+		pool_do(_constantPoolTypes.getClassLoadingStatisticsTable(), &writeClassLoadingStatisticsEvent, this);
+
+		pool_do(_constantPoolTypes.getClassLoaderStatisticsTable(), &writeClassLoaderStatisticsEvent, this);
+
+		pool_do(_constantPoolTypes.getThreadAllocationStatisticsTable(), &writeThreadAllocationStatisticsEvent, this);
+
+		pool_do(_constantPoolTypes.getThreadContextSwitchRateTable(), &writeThreadContextSwitchRateEvent, this);
+
+		pool_do(_constantPoolTypes.getThreadStatisticsTable(), &writeThreadStatisticsEvent, this);
+
+		pool_do(_constantPoolTypes.getSystemGCTable(), &writeSystemGCEvent, this);
+
+		pool_do(_constantPoolTypes.getModuleRequireTable(), &writeModuleRequire, this);
+
+		pool_do(_constantPoolTypes.getModuleExportTable(), &writeModuleExport, this);
+
+		pool_do(_constantPoolTypes.getOldGarbageCollectionTable(), &writeOldGarbageCollectionEvent, this);
+
+		pool_do(_constantPoolTypes.getYoungGarbageCollectionTable(), &writeYoungGarbageCollectionEvent, this);
+
+		pool_do(_constantPoolTypes.getGarbageCollectionTable(), &writeGarbageCollectionEvent, this);
+
+		pool_do(_constantPoolTypes.getPhysicalMemoryTable(), &writePhysicalMemoryEventFromTable, this);
+
+		pool_do(_constantPoolTypes.getGCHeapSummaryTable(), &writeGCHeapSummaryEvent, this);
+
+		pool_do(_constantPoolTypes.getNetworkUtilizationTable(), &writeNetworkUtilizationEvent, this);
+
+		pool_do(_constantPoolTypes.getDataLossTable(), &writeDataLossEvent, this);
+
+		pool_do(_constantPoolTypes.getSystemProcessTable(), &writeSystemProcessEvent, this);
+
+		pool_do(_constantPoolTypes.getNativeLibraryTable(), &writeNativeLibraryEvent, this);
+
+		pool_do(_constantPoolTypes.getThreadDumpTable(), &writeThreadDumpEvent, this);
+
+		pool_do(_constantPoolTypes.getJavaEventDataTable(), &writeJavaEventData, this);
+
+		pool_do(_constantPoolTypes.getObjectAllocationSampleTable(), &writeObjectAllocationSampleEvent, this);
+
+		if (J9_ARE_NO_BITS_SET(_vm->extendedRuntimeFlags3, J9_EXTENDED_RUNTIME3_JFR_V2_SUPPORT)) {
+			/* Only write constant events in first chunk. */
+			if (0 == _vm->jfrState.jfrChunkCount) {
+				writeJVMInformationEvent();
+
+				writeCPUInformationEvent();
+
+				writeVirtualizationInformationEvent();
+
+				writeOSInformationEvent();
+
+				writeInitialSystemPropertyEvents(_vm);
+
+				writeInitialEnvironmentVariableEvents();
+
+				writeGCHeapConfigurationEvent();
+
+				writeYoungGenerationConfigurationEvent();
+
+				writeGCConfigurationEvent();
+
+				writeGCSurvivorConfigurationEvent();
+
+				writeGCTLABConfigurationEvent();
+			}
+
+			writePhysicalMemoryEvent();
+		} else {
+			if (_constantPoolTypes.shouldWriteJVMInformation()) {
+				writeJVMInformationEvent();
+			}
+
+			if (_constantPoolTypes.shouldWriteCPUInformationEvent()) {
+				writeCPUInformationEvent();
+			}
+
+			if (_constantPoolTypes.shouldWriteVirtualizationInformationEvent()) {
+				writeVirtualizationInformationEvent();
+			}
+
+			if (_constantPoolTypes.shouldWriteOSInformationEvent()) {
+				writeOSInformationEvent();
+			}
+
+			if (_constantPoolTypes.shouldWriteInitialSystemPropertyEvents()) {
+				writeInitialSystemPropertyEvents(_vm);
+			}
+
+			if (_constantPoolTypes.shouldWriteInitialEnvironmentVariableEvents()) {
+				writeInitialEnvironmentVariableEvents();
+			}
+
+			if (_constantPoolTypes.shouldWriteGCHeapConfigurationEvent()) {
+				writeGCHeapConfigurationEvent();
+			}
+
+			if (_constantPoolTypes.shouldWriteYoungGenerationConfigurationEvent()) {
+				writeYoungGenerationConfigurationEvent();
+			}
+
+			if (_constantPoolTypes.shouldWriteGCConfigurationEvent()) {
+				writeGCConfigurationEvent();
+			}
+
+			if (_constantPoolTypes.shouldWriteGCSurvivorConfigurationEvent()) {
+				writeGCSurvivorConfigurationEvent();
+			}
+
+			if (_constantPoolTypes.shouldWriteGCTLABConfigurationEvent()) {
+				writeGCTLABConfigurationEvent();
+			}
+		}
+	}
+
 protected:
 
 public:
@@ -298,24 +494,30 @@ public:
 		, _debug(false)
 		, privatePortLibrary(_vm->portLibrary)
 		, _finalWrite(finalWrite)
-		, _constantPoolTypes(currentThread)
+		, _constantPoolTypes(currentThread, finalWrite)
 		, _currentStackFrameBuffer(NULL)
 		, _previousStackTraceEntry(NULL)
 		, _firstStackTraceEntry(NULL)
 		, _currentFrameCount(0)
 		, _globalStringTable(NULL)
-		, _jfrHeaderCursor(NULL)
 		, _bufferWriter(NULL)
 		, _metadataOffset(NULL)
-		, _previousCheckpointDelta(NULL)
-		, _lastDataStart(NULL)
+		, _checkPointEventOffset(NULL)
+		, _lastDataStart(_vm->jfrState.lastCheckpointEvent)
+		, _checkpointHeaderStart(NULL)
+		, _isJFRv2(isJFRV2SupportEnabled(_vm))
+#if JAVA_SPEC_VERSION >= 17
+		, events(_isJFRv2 ? &v2Events : &v1Events)
+#else /* JAVA_SPEC_VERSION >= 17 */
+		, events(&v1Events)
+#endif /* JAVA_SPEC_VERSION >= 17 */
 	{
 	}
 
 	void
-	loadEvents(bool dumpCalled)
+	loadEvents()
 	{
-		_constantPoolTypes.loadEvents(dumpCalled);
+		_constantPoolTypes.loadEvents();
 		_buildResult = _constantPoolTypes.getBuildResult();
 	}
 
@@ -358,7 +560,7 @@ done:
 
 	}
 
-	void writeJFRChunk(bool dumpCalled)
+	void writeJFRChunk()
 	{
 		U_8 *buffer = NULL;
 		UDATA requiredBufferSize = 0;
@@ -370,22 +572,6 @@ done:
 
 		if (_debug) {
 			_constantPoolTypes.printTables();
-		}
-
-		if (FALSE == _vm->jfrState.isConstantEventsInitialized) {
-			omrthread_monitor_enter(_vm->jfrState.isConstantEventsInitializedMutex);
-			if (FALSE == _vm->jfrState.isConstantEventsInitialized) {
-				VM_JFRConstantPoolTypes::initializeJFRConstantEvents(_vm, _currentThread, &_buildResult);
-				if (isResultNotOKay()) {
-					VM_JFRConstantPoolTypes::freeJFRConstantEvents(_vm);
-					omrthread_monitor_exit(_vm->jfrState.isConstantEventsInitializedMutex);
-					goto done;
-				}
-				/* Ensure that initialization is complete when the initialized variable is set to true */
-				VM_AtomicSupport::writeBarrier();
-				_vm->jfrState.isConstantEventsInitialized = TRUE;
-			}
-			omrthread_monitor_exit(_vm->jfrState.isConstantEventsInitializedMutex);
 		}
 
 		requiredBufferSize = calculateRequiredBufferSize();
@@ -400,165 +586,62 @@ done:
 			VM_BufferWriter writer(privatePortLibrary, buffer, requiredBufferSize);
 
 			_bufferWriter = &writer;
-
-			/* write the header last */
-			_jfrHeaderCursor = _bufferWriter->getAndIncCursor(JFR_CHUNK_HEADER_SIZE);
-
-			/* Metadata is always written first, checkpoint events can be in any order */
-			_metadataOffset = writeJFRMetadata();
-
-			_checkPointEventOffset = writeThreadStateCheckpointEvent();
-
-			writeFrameTypeCheckpointEvent();
-
-			if (0 == _vm->jfrState.jfrChunkCount) {
-				writeNarrowOOPModeTypesEvent();
+			if (_debug) {
+				j9tty_printf(PORTLIB, "writeJFRChunk _isJFRv2=%d finalWrite=%d generation=%u\n", (int)_isJFRv2, (int)_finalWrite, (U_32)_vm->jfrState.chunkGeneration);
 			}
+			if (_isJFRv2) {
+				if (0 == _vm->jfrState.chunkGeneration) {
+					Assert_VM_true(0 == _vm->jfrState.lastGenerationFileCursor);
 
-			writeGCNameTypesEvent();
+					/* write the header last */
+					_bufferWriter->getAndIncCursor(JFR_CHUNK_HEADER_SIZE);
+				}
+				/* Metadata is always written first, checkpoint events can be in any order */
+				_metadataOffset = writeJFRMetadata();
 
-			writeGCCauseTypesEvent();
+				writeEvents();
 
-			writeGCWhenTypesEvent();
-
-			writeThreadCheckpointEvent();
-
-			writeThreadGroupCheckpointEvent();
-
-			writeSymbolTableCheckpointEvent();
-
-			writeModuleCheckpointEvent();
-
-			writeClassloaderCheckpointEvent();
-
-			writeClassCheckpointEvent();
-
-			writePackageCheckpointEvent();
-
-			writeMethodCheckpointEvent();
-
-			writeStacktraceCheckpointEvent();
-
-			writeNetworkInterfaceNameCheckpointEvent();
-
-			pool_do(_constantPoolTypes.getExecutionSampleTable(), &writeExecutionSampleEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getThreadStartTable(), &writeThreadStartEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getThreadEndTable(), &writeThreadEndEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getThreadSleepTable(), &writeThreadSleepEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getMonitorWaitTable(), &writeMonitorWaitEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getMonitorEnterTable(), &writeMonitorEnterEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getThreadParkTable(), &writeThreadParkEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getCPULoadTable(), &writeCPULoadEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getThreadCPULoadTable(), &writeThreadCPULoadEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getClassLoadingStatisticsTable(), &writeClassLoadingStatisticsEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getClassLoaderStatisticsTable(), &writeClassLoaderStatisticsEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getThreadAllocationStatisticsTable(), &writeThreadAllocationStatisticsEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getThreadContextSwitchRateTable(), &writeThreadContextSwitchRateEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getThreadStatisticsTable(), &writeThreadStatisticsEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getSystemGCTable(), &writeSystemGCEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getModuleRequireTable(), &writeModuleRequire, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getModuleExportTable(), &writeModuleExport, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getOldGarbageCollectionTable(), &writeOldGarbageCollectionEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getYoungGarbageCollectionTable(), &writeYoungGarbageCollectionEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getGarbageCollectionTable(), &writeGarbageCollectionEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getPhysicalMemoryTable(), &writePhysicalMemoryEventFromTable, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getGCHeapSummaryTable(), &writeGCHeapSummaryEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getNetworkUtilizationTable(), &writeNetworkUtilizationEvent, this);
-
-			pool_do(_constantPoolTypes.getDataLossTable(), &writeDataLossEvent, _bufferWriter);
-
-			pool_do(_constantPoolTypes.getSystemProcessTable(), &writeSystemProcessEvent, this);
-
-			pool_do(_constantPoolTypes.getNativeLibraryTable(), &writeNativeLibraryEvent, this);
-
-			pool_do(_constantPoolTypes.getThreadDumpTable(), &writeThreadDumpEvent, this);
-
-			pool_do(_constantPoolTypes.getJavaEventDataTable(), &writeJavaEventData, this);
-
-			if (J9_ARE_NO_BITS_SET(_vm->extendedRuntimeFlags3, J9_EXTENDED_RUNTIME3_JFR_V2_SUPPORT)) {
-				/* Only write constant events in first chunk. */
-				if (0 == _vm->jfrState.jfrChunkCount) {
-					writeJVMInformationEvent();
-
-					writeCPUInformationEvent();
-
-					writeVirtualizationInformationEvent();
-
-					writeOSInformationEvent();
-
-					writeInitialSystemPropertyEvents(_vm);
-
-					writeInitialEnvironmentVariableEvents();
-
-					writeGCHeapConfigurationEvent();
-
-					writeYoungGenerationConfigurationEvent();
-
-					writeGCConfigurationEvent();
+				if (0 == _vm->jfrState.chunkGeneration) {
+					writeCheckpointEvents();
+				} else {
+					writeDynamicCheckpointEvents();
 				}
 
-				writePhysicalMemoryEvent();
+				/* Chunk generation increments from 1 -> 255 and rolls over back to 1 skipping the
+				 * zero, as zero means the chunk is complete.
+				 */
+				if (U_8_MAX == _vm->jfrState.chunkGeneration) {
+					_vm->jfrState.chunkGeneration = 1;
+				} else {
+					_vm->jfrState.chunkGeneration++;
+				}
+
+				writeCheckpointHeader();
+
+				if (_finalWrite) {
+					/* The chunk is complete, the next chunk starts from scratch. */
+					_vm->jfrState.lastGenerationFileCursor = 0;
+					_vm->jfrState.lastCheckpointEvent = 0;
+				} else {
+					_vm->jfrState.lastGenerationFileCursor += _bufferWriter->getSize();
+					_vm->jfrState.lastCheckpointEvent = _lastDataStart;
+				}
+				if (_debug) {
+					j9tty_printf(PORTLIB, "writeJFRChunk end metadataOffset=%p checkpointHeader=%p lastDataOffset=%lld lastGenerationFileCursor=%llu\n", _metadataOffset, _checkpointHeaderStart, (long long)_lastDataStart, (unsigned long long)_vm->jfrState.lastGenerationFileCursor);
+				}
 			} else {
-				if (_constantPoolTypes.shouldWriteJVMInformation()) {
-					writeJVMInformationEvent();
-				}
+				/* write the header last */
+				_bufferWriter->getAndIncCursor(JFR_CHUNK_HEADER_SIZE);
 
-				if (_constantPoolTypes.shouldWriteCPUInformationEvent()) {
-					writeCPUInformationEvent();
-				}
+				/* Metadata is always written first, checkpoint events can be in any order */
+				_metadataOffset = writeJFRMetadata();
 
-				if (_constantPoolTypes.shouldWriteVirtualizationInformationEvent()) {
-					writeVirtualizationInformationEvent();
-				}
+				writeEvents();
 
-				if (_constantPoolTypes.shouldWriteOSInformationEvent()) {
-					writeOSInformationEvent();
-				}
+				writeCheckpointEvents();
 
-				if (_constantPoolTypes.shouldWriteInitialSystemPropertyEvents()) {
-					writeInitialSystemPropertyEvents(_vm);
-				}
-
-				if (_constantPoolTypes.shouldWriteInitialEnvironmentVariableEvents()) {
-					writeInitialEnvironmentVariableEvents();
-				}
-
-				if (_constantPoolTypes.shouldWriteGCHeapConfigurationEvent()) {
-					writeGCHeapConfigurationEvent();
-				}
-
-				if (_constantPoolTypes.shouldWriteYoungGenerationConfigurationEvent()) {
-					writeYoungGenerationConfigurationEvent();
-				}
-
-				if (_constantPoolTypes.shouldWriteGCConfigurationEvent()) {
-					writeGCConfigurationEvent();
-				}
+				writeJFRHeader(_bufferWriter->getBufferStart());
 			}
-
-			writeJFRHeader();
 
 			if (_bufferWriter->overflowOccurred()) {
 				_buildResult = OutOfMemory;
@@ -571,9 +654,11 @@ done:
 
 			writeJFRChunkToFile();
 
-			_vm->jfrState.jfrChunkCount += 1;
-			_vm->jfrState.chunkStartTime = VM_JFRUtils::getCurrentTimeNanos(privatePortLibrary, _buildResult);
-			_vm->jfrState.chunkStartTicks = j9time_nano_time();
+			if (_finalWrite) {
+				_vm->jfrState.jfrChunkCount += 1;
+				_vm->jfrState.chunkStartTime = VM_JFRUtils::getCurrentTimeNanos(privatePortLibrary, _buildResult);
+				_vm->jfrState.chunkStartTicks = j9time_nano_time();
+			}
 
 freeBuffer:
 			_bufferWriter = NULL;
@@ -588,13 +673,14 @@ done:
 	writeExecutionSampleEvent(void *anElement, void *userData)
 	{
 		ExecutionSampleEntry *entry = (ExecutionSampleEntry *)anElement;
-		VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+		VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+		VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 		/* reserve size field */
 		U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 		/* write event type */
-		_bufferWriter->writeLEB128(ExecutionSampleID);
+		_bufferWriter->writeLEB128(writer->events->ExecutionSampleID);
 
 		/* write start time */
 		_bufferWriter->writeLEB128(entry->ticks);
@@ -616,13 +702,14 @@ done:
 	writeThreadStartEvent(void *anElement, void *userData)
 	{
 		ThreadStartEntry *entry = (ThreadStartEntry *)anElement;
-		VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+		VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+		VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 		/* reserve size field */
 		U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 		/* write event type */
-		_bufferWriter->writeLEB128(ThreadStartID);
+		_bufferWriter->writeLEB128(writer->events->ThreadStartID);
 
 		/* write start time */
 		_bufferWriter->writeLEB128(entry->ticks);
@@ -647,13 +734,14 @@ done:
 	writeThreadEndEvent(void *anElement, void *userData)
 	{
 		ThreadEndEntry *entry = (ThreadEndEntry *)anElement;
-		VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+		VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+		VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 		/* reserve size field */
 		U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 		/* write event type */
-		_bufferWriter->writeLEB128(ThreadEndID);
+		_bufferWriter->writeLEB128(writer->events->ThreadEndID);
 
 		/* write start time */
 		_bufferWriter->writeLEB128(entry->ticks);
@@ -672,13 +760,14 @@ done:
 	writeThreadSleepEvent(void *anElement, void *userData)
 	{
 		ThreadSleepEntry *entry = (ThreadSleepEntry *)anElement;
-		VM_BufferWriter *_bufferWriter = (VM_BufferWriter *) userData;
+		VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+		VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 		/* reserve size field */
 		U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 		/* write event type */
-		_bufferWriter->writeLEB128(ThreadSleepID);
+		_bufferWriter->writeLEB128(writer->events->ThreadSleepID);
 
 		/* write start time - this is when the sleep started not when it ended so we
 		 * need to subtract the duration since the event is emitted when the sleep ends.
@@ -705,13 +794,14 @@ done:
 	writeMonitorWaitEvent(void *anElement, void *userData)
 	{
 		MonitorWaitEntry *entry = (MonitorWaitEntry *)anElement;
-		VM_BufferWriter *_bufferWriter = (VM_BufferWriter *) userData;
+		VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+		VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 		/* reserve size field */
 		U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 		/* write event type */
-		_bufferWriter->writeLEB128(MonitorWaitID);
+		_bufferWriter->writeLEB128(writer->events->MonitorWaitID);
 
 		/* write start time - this is when the sleep started not when it ended so we
 		 * need to subtract the duration since the event is emitted when the sleep ends.
@@ -750,13 +840,14 @@ done:
 	writeMonitorEnterEvent(void *anElement, void *userData)
 	{
 		MonitorEnterEntry *entry = (MonitorEnterEntry *)anElement;
-		VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+		VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+		VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 		/* reserve size field */
 		U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 		/* write event type */
-		_bufferWriter->writeLEB128(MonitorEnterID);
+		_bufferWriter->writeLEB128(writer->events->MonitorEnterID);
 
 		/* write start time - this is when the monitor enter started not when it ended so we
 		 * need to subtract the duration since the event is emitted when the monitor enter ends.
@@ -789,13 +880,14 @@ done:
 	writeThreadParkEvent(void *anElement, void *userData)
 	{
 		ThreadParkEntry *entry = (ThreadParkEntry *)anElement;
-		VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+		VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+		VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 		/* reserve size field */
 		U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 		/* write event type */
-		_bufferWriter->writeLEB128(ThreadParkID);
+		_bufferWriter->writeLEB128(writer->events->ThreadParkID);
 
 		/* write start time - this is when the sleep started not when it ended so we
 		 * need to subtract the duration since the event is emitted when the sleep ends.
@@ -831,13 +923,14 @@ done:
 	writeCPULoadEvent(void *anElement, void *userData)
 	{
 		CPULoadEntry *entry = (CPULoadEntry *)anElement;
-		VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+		VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+		VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 		/* reserve size field */
 		U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 		/* write event type */
-		_bufferWriter->writeLEB128(CPULoadID);
+		_bufferWriter->writeLEB128(writer->events->CPULoadID);
 
 		/* write start time */
 		_bufferWriter->writeLEB128(entry->ticks);
@@ -859,13 +952,14 @@ done:
 	writeThreadCPULoadEvent(void *anElement, void *userData)
 	{
 		ThreadCPULoadEntry *entry = (ThreadCPULoadEntry *)anElement;
-		VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+		VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+		VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 		/* reserve size field */
 		U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 		/* write event type */
-		_bufferWriter->writeLEB128(ThreadCPULoadID);
+		_bufferWriter->writeLEB128(writer->events->ThreadCPULoadID);
 
 		/* write start time */
 		_bufferWriter->writeLEB128(entry->ticks);
@@ -887,13 +981,14 @@ done:
 	writePhysicalMemoryEventFromTable(void *anElement, void *userData)
 	{
 		PhysicalMemoryEntry *entry = (PhysicalMemoryEntry *)anElement;
-		VM_BufferWriter *_bufferWriter = (VM_BufferWriter *)userData;
+		VM_JFRChunkWriter *writer = (VM_JFRChunkWriter *)userData;
+		VM_BufferWriter *_bufferWriter = writer->_bufferWriter;
 
 		/* reserve size field */
 		U_8 *dataStart = reserveEventSize(_bufferWriter);
 
 		/* write event type */
-		_bufferWriter->writeLEB128(PhysicalMemoryID);
+		_bufferWriter->writeLEB128(writer->events->PhysicalMemoryID);
 
 		/* write start time */
 		_bufferWriter->writeLEB128(entry->ticks);
@@ -920,6 +1015,10 @@ done:
 			_buildResult = FileIOError;
 		}
 
+		if (_isJFRv2 && isOkay()) {
+			updateFileHeader();
+		}
+
 		if (_debug) {
 			writeIntermediateJFRChunkToFile();
 		}
@@ -927,7 +1026,20 @@ done:
 		return;
 	}
 
-	void writeJFRHeader();
+	void
+	updateFileHeader()
+	{
+		U_8 headerBuf[JFR_CHUNK_HEADER_SIZE] = {0};
+		memcpy(headerBuf, _checkpointHeaderStart, JFR_CHUNK_HEADER_SIZE);
+
+		j9file_seek(_vm->jfrState.blobFileDescriptor, 0, EsSeekSet);
+		j9file_write(_vm->jfrState.blobFileDescriptor, headerBuf, JFR_CHUNK_HEADER_SIZE);
+		j9file_seek(_vm->jfrState.blobFileDescriptor, 0, EsSeekEnd);
+	}
+
+	void writeJFRHeader(U_8 *headerStart);
+
+	U_8 *writeCheckpointHeader();
 
 	U_8 *writeJFRMetadata();
 
@@ -989,6 +1101,10 @@ done:
 
 	void writeGCConfigurationEvent();
 
+	void writeGCSurvivorConfigurationEvent();
+
+	void writeGCTLABConfigurationEvent();
+
 	void writeInitialSystemPropertyEvents(J9JavaVM *vm);
 
 	void writeInitialEnvironmentVariableEvents();
@@ -1028,6 +1144,8 @@ done:
 	static void writeThreadDumpEvent(void *anElement, void *userData);
 
 	static void writeJavaEventData(void *anElement, void *userData);
+
+	static void writeObjectAllocationSampleEvent(void *anElement, void *userData);
 
 	UDATA
 	calculateRequiredBufferSize()
@@ -1085,14 +1203,22 @@ done:
 
 		requiredBufferSize += OS_INFORMATION_EVENT_SIZE;
 
-		if (isJFRV2SupportEnabled(_vm)) {
+		if (_isJFRv2) {
 			requiredBufferSize += (_constantPoolTypes.getPhysicalMemoryCount() * PHYSICAL_MEMORY_EVENT_SIZE);
 
 			requiredBufferSize += (_constantPoolTypes.shouldWriteGCConfigurationEvent() * GC_CONFIGURATION_EVENT_SIZE);
+
+			requiredBufferSize += (_constantPoolTypes.shouldWriteGCSurvivorConfigurationEvent() * GC_SURVIVOR_CONFIGURATION_EVENT_SIZE);
+
+			requiredBufferSize += (_constantPoolTypes.shouldWriteGCTLABConfigurationEvent() * GC_TLAB_CONFIGURATION_EVENT_SIZE);
 		} else {
 			requiredBufferSize += PHYSICAL_MEMORY_EVENT_SIZE;
 
 			requiredBufferSize += GC_CONFIGURATION_EVENT_SIZE;
+
+			requiredBufferSize += GC_SURVIVOR_CONFIGURATION_EVENT_SIZE;
+
+			requiredBufferSize += GC_TLAB_CONFIGURATION_EVENT_SIZE;
 		}
 
 		requiredBufferSize += VIRTUALIZATION_INFORMATION_EVENT_SIZE;
@@ -1144,6 +1270,8 @@ done:
 		requiredBufferSize += (_constantPoolTypes.getDataLossCount() * DATA_LOSS_EVENT_SIZE);
 
 		requiredBufferSize += _constantPoolTypes.getJavaEventDataCount();
+
+		requiredBufferSize += (_constantPoolTypes.getObjectAllocationSampleCount() * OBJECT_ALLOCATION_SAMPLE_EVENT_SIZE);
 
 		requiredBufferSize *= 2;
 

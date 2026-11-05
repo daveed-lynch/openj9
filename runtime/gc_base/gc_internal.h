@@ -139,6 +139,11 @@ extern J9_CFUNC jint  JNICALL queryGCStatus(JavaVM *vm, jint *nHeaps, GCStatus *
 extern J9_CFUNC int j9gc_finalizer_startup(J9JavaVM * vm);
 extern J9_CFUNC UDATA j9gc_wait_for_reference_processing(J9JavaVM *vm);
 extern J9_CFUNC UDATA j9gc_get_maximum_heap_size(J9JavaVM *javaVM);
+extern J9_CFUNC UDATA j9gc_get_max_tenuring_threshold(J9JavaVM *javaVM);
+extern J9_CFUNC UDATA j9gc_get_initial_tenuring_threshold(J9JavaVM *javaVM);
+extern J9_CFUNC UDATA j9gc_get_tlh_minimum_size(J9JavaVM *javaVM);
+extern J9_CFUNC UDATA j9gc_get_tlh_refill_waste_limit(J9JavaVM *javaVM);
+extern J9_CFUNC BOOLEAN j9gc_is_tlab_enabled(J9JavaVM *javaVM);
 extern J9_CFUNC void* j9gc_get_heap_base(J9JavaVM *javaVM);
 extern J9_CFUNC void* j9gc_get_heap_top(J9JavaVM *javaVM);
 extern J9_CFUNC UDATA j9gc_get_minimum_young_generation_size(J9JavaVM *javaVM);
@@ -170,6 +175,7 @@ extern J9_CFUNC UDATA j9gc_objaccess_indexableReadU8(J9VMThread *vmThread, J9Ind
 extern J9_CFUNC UDATA j9gc_get_softmx(J9JavaVM *javaVM);
 extern J9_CFUNC UDATA j9gc_set_softmx(J9JavaVM *javaVM, UDATA newsoftmx);
 extern J9_CFUNC void j9gc_finalizer_shutdown(J9JavaVM * vm);
+extern J9_CFUNC void j9gc_gcThreads_shutdown(J9JavaVM * vm);
 extern J9_CFUNC UDATA j9gc_get_object_size_in_bytes(J9JavaVM* javaVM, j9object_t objectPtr);
 extern J9_CFUNC UDATA j9gc_get_object_total_footprint_in_bytes(J9JavaVM *javaVM, j9object_t objectPtr);
 extern J9_CFUNC BOOLEAN j9gc_get_explicit_GC_disabled(J9JavaVM *javaVM);
@@ -262,6 +268,8 @@ extern J9_CFUNC const char* omrgc_get_version(OMR_VM *omrVM);
 extern J9_CFUNC void j9gc_startGCIfTimeExpired(OMR_VMThread* vmThread);
 extern J9_CFUNC void j9gc_allocation_threshold_changed(J9VMThread* currentThread);
 extern J9_CFUNC void j9gc_set_allocation_sampling_interval(J9JavaVM *vm, UDATA samplingInterval);
+extern J9_CFUNC void j9gc_set_internal_allocation_sampling_interval(J9JavaVM *vm, UDATA samplingInterval);
+extern J9_CFUNC UDATA j9gc_get_internal_allocation_sampling_interval(J9JavaVM *vm);
 extern J9_CFUNC void j9gc_set_allocation_threshold(J9VMThread* vmThread, UDATA low, UDATA high);
 extern J9_CFUNC void j9gc_objaccess_recentlyAllocatedObject(J9VMThread *vmThread, J9Object *dstObject);
 extern J9_CFUNC void j9gc_objaccess_postStoreClassToClassLoader(J9VMThread *vmThread, J9ClassLoader *destClassLoader, J9Class *srcClass);

@@ -4879,6 +4879,39 @@ TR::KnownObjectTable::Index TR_J9VMBase::getMethodAccessorIndex(TR::Compilation 
     return result;
 }
 
+TR::KnownObjectTable::Index TR_J9VMBase::getFieldAccessorIndex(TR::Compilation *comp,
+    TR::KnownObjectTable::Index fieldIndex)
+{
+    TR::KnownObjectTable::Index result = TR::KnownObjectTable::UNKNOWN;
+    TR::KnownObjectTable *knot = comp->getKnownObjectTable();
+    if (!knot)
+        return result;
+
+    TR::VMAccessCriticalSection getFAIndex(this);
+
+    const char * const fieldClassName = "java/lang/reflect/Field";
+    const int32_t fieldClassNameLen = (int32_t)strlen(fieldClassName);
+    TR_OpaqueClassBlock *fieldClass = getSystemClassFromClassName(fieldClassName, fieldClassNameLen);
+
+    TR_OpaqueClassBlock *fieldObjClass = getObjectClassFromKnownObjectIndex(comp, fieldIndex);
+
+    if (fieldClass == NULL || isInstanceOf(fieldObjClass, fieldClass, true, true) != TR_yes) {
+        logprintf(comp->getOption(TR_TraceOptDetails), comp->log(),
+            "getFieldAccessorIndex: failed java/lang/reflect/Field type check.\n");
+        return result;
+    }
+
+    uintptr_t fieldObj = knot->getPointer(fieldIndex);
+    uintptr_t faObject = getReferenceField(fieldObj, "fieldAccessor", "Ljdk/internal/reflect/FieldAccessor;");
+    if (!faObject)
+        return result;
+    result = knot->getOrCreateIndex(faObject);
+
+    J9::ConstProvenanceGraph *cpg = comp->constProvenanceGraph();
+    cpg->addEdge(cpg->knownObject(fieldIndex), cpg->knownObject(result));
+    return result;
+}
+
 int32_t TR_J9VMBase::getVarHandleAccessDescriptorMode(TR::Compilation *comp, TR::KnownObjectTable::Index adIndex)
 {
     TR::VMAccessCriticalSection getAccessDescriptorMode(this);
@@ -6531,12 +6564,17 @@ bool TR_J9VMBase::javaLangClassGetModifiersImpl(TR_OpaqueClassBlock *clazzPointe
         result |= (J9AccAbstract | J9AccFinal);
 #if defined(J9VM_OPT_VALHALLA_VALUE_TYPES)
         if (J9_IS_CLASSFILE_OR_ROMCLASS_VALUETYPE_VERSION(romClass)) {
-            if (J9_ARE_ANY_BITS_SET(vmThread()->javaVM->extendedRuntimeFlags2, J9_EXTENDED_RUNTIME2_ENABLE_PREVIEW)) {
+            if (TR::Compiler->om.areValueTypesEnabled()) {
                 result |= J9AccClassHasIdentity;
             }
         }
 #endif /* defined(J9VM_OPT_VALHALLA_VALUE_TYPES) */
     }
+#if defined(J9VM_OPT_VALHALLA_VALUE_TYPES)
+    if (!TR::Compiler->om.areValueTypesEnabled()) {
+        result &= ~J9AccClassHasIdentity;
+    }
+#endif /* defined(J9VM_OPT_VALHALLA_VALUE_TYPES) */
     return true;
 }
 
@@ -7764,6 +7802,13 @@ TR::Node *TR_J9VM::inlineNativeCall(TR::Compilation *comp, TR::TreeTop *callNode
             return callNode;
         }
         case TR::java_lang_J9VMInternals_getSuperclass: {
+            // Recreating the call as JITHelpers.getSuperclass marks its bytecode info as "doNotProfile". If the
+            // resulting Java calls are not subsequently inlined, they become OSR yield points that cannot induce
+            // an OSR transition, which is invalid when fear point placement is unrestricted. When that's the case,
+            // keep the original native call, so it remains an inducible OSR yield point.
+            if (comp->isFearPointPlacementUnrestricted())
+                return callNode;
+
             TR_OpaqueClassBlock *jitHelpersClass = comp->getJITHelpersClassPointer();
             if (jitHelpersClass && isClassInitialized(jitHelpersClass)) {
                 // fish for the getSuperclass method in JITHelpers

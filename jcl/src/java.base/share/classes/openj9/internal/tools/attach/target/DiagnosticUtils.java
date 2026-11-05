@@ -33,6 +33,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import com.ibm.oti.vm.VM;
 
@@ -223,7 +224,12 @@ public class DiagnosticUtils {
 			}
 		}
 /*[ENDIF] JFR_SUPPORT */
-		String cmd = String.join(DIAGNOSTICS_OPTION_SEPARATOR, Arrays.asList(options).subList(skip, optionsLength));
+		// executeDiagnosticCommand() splits an incoming command with DIAGNOSTICS_OPTION_SEPARATOR,
+		// the space(s) are to be replaced with DIAGNOSTICS_OPTION_SEPARATOR, otherwise wrong command.
+		String cmd = Arrays.stream(options, skip, optionsLength)
+				.map(str -> str.replace(" ", DIAGNOSTICS_OPTION_SEPARATOR))
+				.collect(Collectors.joining(DIAGNOSTICS_OPTION_SEPARATOR));
+		IPC.logMessage("makeJcmdCommand: cmd = ", cmd);
 		return cmd;
 	}
 
@@ -673,6 +679,9 @@ public class DiagnosticUtils {
 
 				commandTable.put(JFR.DIAGNOSTICS_JFR_CONFIGURE, JFR::doJFRv2);
 				helpTable.put(JFR.DIAGNOSTICS_JFR_CONFIGURE, JFR.DIAGNOSTICS_JFR_CONFIGURE_HELP);
+
+				commandTable.put(JFR.DIAGNOSTICS_JFR_CHECK, JFR::doJFRv2);
+				helpTable.put(JFR.DIAGNOSTICS_JFR_CHECK, JFR.DIAGNOSTICS_JFR_CHECK_HELP);
 			} else
 /*[ENDIF] JAVA_SPEC_VERSION == 17 */
 			{
@@ -699,6 +708,9 @@ public class DiagnosticUtils {
 
 			commandTable.put(JFR.DIAGNOSTICS_JFR_CONFIGURE, JFR::getJFRModuleUnavailableMessage);
 			helpTable.put(JFR.DIAGNOSTICS_JFR_CONFIGURE, JFR.DIAGNOSTICS_JFR_CONFIGURE_HELP);
+
+			commandTable.put(JFR.DIAGNOSTICS_JFR_CHECK, JFR::getJFRModuleUnavailableMessage);
+			helpTable.put(JFR.DIAGNOSTICS_JFR_CHECK, JFR.DIAGNOSTICS_JFR_CHECK_HELP);
 /*[ENDIF] JAVA_SPEC_VERSION == 17 */
 		}
 /*[ENDIF] JFR_SUPPORT */

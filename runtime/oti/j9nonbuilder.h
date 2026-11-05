@@ -608,6 +608,15 @@ typedef struct J9JFRJavaEventData {
 
 #define J9JFRJAVAEVENTDATA_EVENTDATA(jfrEvent) ((U_8 *)(((J9JFRJavaEventData *)(jfrEvent)) + 1))
 
+/* Variable-size structure - stackTraceSize worth of UDATA follow the fixed portion */
+typedef struct J9JFRObjectAllocationSample {
+	J9JFR_EVENT_WITH_STACKTRACE_FIELDS
+	struct J9Class *objectClass;
+	UDATA weight;
+} J9JFRObjectAllocationSample;
+
+#define J9JFROBJECTALLOCATIONSAMPLE_STACKTRACE(jfrEvent) ((UDATA *)(((J9JFRObjectAllocationSample *)(jfrEvent)) + 1))
+
 typedef struct J9JFRClassLoaderStatistics {
 	J9JFR_EVENT_COMMON_FIELDS
 	struct J9ClassLoader *classLoader;
@@ -2162,6 +2171,9 @@ typedef struct J9Module {
 	struct J9HashTable *removeExportsHashTable;
 	BOOLEAN isLoose;
 	BOOLEAN isOpen;
+#if defined(J9VM_OPT_JFR)
+	U_32 moduleID;
+#endif /* defined(J9VM_OPT_JFR) */
 } J9Module;
 
 typedef struct J9Package {
@@ -2396,7 +2408,6 @@ typedef struct J9BytecodeVerificationData {
 	J9HashTable *strictFields;
 	UDATA strictFieldsUnsetCount;
 	J9HashTable *earlyLarvalFrames;
-	J9EarlyLarvalFrame *earlyLarvalFramePrevious;
 #endif /* defined(J9VM_OPT_VALHALLA_STRICT_FIELDS) */
 } J9BytecodeVerificationData;
 
@@ -3025,7 +3036,7 @@ typedef struct J9StackWalkState {
 	void* inlineMap;
 	UDATA loopBreaker;
 	/* The size of J9StackWalkState must be a multiple of 8 because it is inlined into
-	 * J9VMThread where alignment assumotions are being made.
+	 * J9VMThread where alignment assumptions are being made.
 	 */
 #if 1 && !defined(J9VM_ENV_DATA64) /* Change to 0 or 1 based on number of fields above */
 	U_32 padTo8;
@@ -4013,6 +4024,7 @@ typedef struct J9ClassLoader {
 	void *outlivingLoaders;
 #if defined(J9VM_OPT_JFR)
 	UDATA loadedClassCount;
+	U_32 classLoaderID;
 #endif /* defined(J9VM_OPT_JFR) */
 } J9ClassLoader;
 
@@ -5070,6 +5082,7 @@ typedef struct J9MemoryManagerFunctions {
 #if defined(J9VM_GC_FINALIZATION)
 	int  ( *j9gc_finalizer_startup)(struct J9JavaVM * vm) ;
 	void  ( *j9gc_finalizer_shutdown)(struct J9JavaVM * vm) ;
+	void  ( *j9gc_gcThreads_shutdown)(struct J9JavaVM * vm) ;
 	UDATA ( *j9gc_wait_for_reference_processing)(struct J9JavaVM * vm) ;
 	void  ( *runFinalization)(struct J9VMThread *vmThread) ;
 #endif /* defined(J9VM_GC_FINALIZATION) */
@@ -5126,6 +5139,11 @@ typedef struct J9MemoryManagerFunctions {
 	UDATA  ( *j9gc_get_softmx)(struct J9JavaVM *javaVM) ;
 	UDATA  ( *j9gc_get_initial_heap_size)(struct J9JavaVM *javaVM) ;
 	UDATA  ( *j9gc_get_maximum_heap_size)(struct J9JavaVM *javaVM) ;
+	UDATA  ( *j9gc_get_max_tenuring_threshold)(struct J9JavaVM *javaVM) ;
+	UDATA  ( *j9gc_get_initial_tenuring_threshold)(struct J9JavaVM *javaVM) ;
+	UDATA  ( *j9gc_get_tlh_minimum_size)(struct J9JavaVM *javaVM) ;
+	UDATA  ( *j9gc_get_tlh_refill_waste_limit)(struct J9JavaVM *javaVM) ;
+	BOOLEAN  ( *j9gc_is_tlab_enabled)(struct J9JavaVM *javaVM) ;
 	UDATA  ( *j9gc_get_minimum_young_generation_size)(struct J9JavaVM *javaVM) ;
 	UDATA  ( *j9gc_get_maximum_young_generation_size)(struct J9JavaVM *javaVM) ;
 	UDATA  ( *j9gc_objaccess_checkClassLive)(struct J9JavaVM *javaVM, J9Class *classPtr) ;
@@ -5257,6 +5275,8 @@ typedef struct J9MemoryManagerFunctions {
 	UDATA  ( *j9gc_arraylet_getLeafLogSize)(struct J9JavaVM* javaVM) ;
 	void  ( *j9gc_get_offheap_data)(struct J9JavaVM *javaVM, void **offheapControlStructure, void **base, void **top, UDATA *usage);
 	void  ( *j9gc_set_allocation_sampling_interval)(struct J9JavaVM *vm, UDATA samplingInterval);
+	void   ( *j9gc_set_internal_allocation_sampling_interval)(struct J9JavaVM *vm, UDATA samplingInterval);
+	UDATA  ( *j9gc_get_internal_allocation_sampling_interval)(struct J9JavaVM *vm);
 	void  ( *j9gc_set_allocation_threshold)(struct J9VMThread *vmThread, UDATA low, UDATA high) ;
 	void  ( *j9gc_objaccess_recentlyAllocatedObject)(struct J9VMThread *vmThread, J9Object *dstObject) ;
 	void  ( *j9gc_objaccess_postStoreClassToClassLoader)(struct J9VMThread *vmThread, J9ClassLoader *destClassLoader, J9Class *srcClass) ;
@@ -5664,6 +5684,7 @@ typedef struct J9InternalVMFunctions {
 	BOOLEAN ( *isFieldNullRestricted)(J9ROMFieldShape *field);
 	UDATA ( *getFlattenableFieldOffset)(struct J9Class *fieldOwner, J9ROMFieldShape *field);
 	BOOLEAN ( *isFlattenableFieldFlattened)(J9Class *fieldOwner, J9ROMFieldShape *field);
+	BOOLEAN ( *isFieldFlattened)(J9Class *fieldOwner, J9ROMFieldShape *field);
 	struct J9Class* ( *getFlattenableFieldType)(J9Class *fieldOwner, J9ROMFieldShape *field);
 	UDATA ( *getFlattenableFieldSize)(struct J9VMThread* currentThread, J9Class *fieldOwner, J9ROMFieldShape *field);
 	UDATA ( *arrayElementSize)(J9ArrayClass* arrayClass);
@@ -6277,6 +6298,78 @@ typedef struct J9VMThread {
 #define J9VMTHREAD_DISCONTIGUOUS_INDEXABLE_HEADER_SIZE(vmThread) ((vmThread)->discontiguousIndexableHeaderSize)
 #define J9VMTHREAD_UNSAFE_INDEXABLE_HEADER_SIZE(vmThread) ((vmThread)->unsafeIndexableHeaderSize)
 
+#if defined(J9VM_OPT_JFR)
+/* This matches jdk.jfr.internal.LogLevel. */
+typedef enum JFRLogLevel {
+	JFRLOG_LEVEL_INVALID = 0,
+	JFRLOG_LEVEL_TRACE   = 1,
+	JFRLOG_LEVEL_DEBUG   = 2,
+	JFRLOG_LEVEL_INFO    = 3,
+	JFRLOG_LEVEL_WARN    = 4,
+	JFRLOG_LEVEL_ERROR   = 5,
+} JFRLogLevel;
+
+/* JFR individual tags */
+typedef enum JFRLogTag {
+	JFRTAG_INVALID    = 0,
+	JFRTAG_JFR        = 0x0001,
+	JFRTAG_SYSTEM     = 0x0002,
+	JFRTAG_EVENT      = 0x0004,
+	JFRTAG_SETTING    = 0x0008,
+	JFRTAG_BYTECODE   = 0x0010,
+	JFRTAG_PARSER     = 0x0020,
+	JFRTAG_METADATA   = 0x0040,
+	JFRTAG_STREAMING  = 0x0080,
+	JFRTAG_THROTTLE   = 0x0100,
+	JFRTAG_DCMD       = 0x0200,
+	JFRTAG_START      = 0x0400
+} JFRLogTag;
+
+/* These are valid tag combinations, and should match jdk.jfr.internal.LogTag. */
+typedef enum JFRLogTagCombination {
+	JFRCOMBINATION_JFRTAG_INVALID       = 0, /* invalid JFR tag */
+	JFRCOMBINATION_JFR                  = JFRTAG_JFR,
+	JFRCOMBINATION_JFR_SYSTEM           = JFRTAG_JFR | JFRTAG_SYSTEM,
+	JFRCOMBINATION_JFR_SYSTEM_EVENT     = JFRTAG_JFR | JFRTAG_SYSTEM | JFRTAG_EVENT,
+	JFRCOMBINATION_JFR_SYSTEM_SETTING   = JFRTAG_JFR | JFRTAG_SYSTEM | JFRTAG_SETTING,
+	JFRCOMBINATION_JFR_SYSTEM_BYTECODE  = JFRTAG_JFR | JFRTAG_SYSTEM | JFRTAG_BYTECODE,
+	JFRCOMBINATION_JFR_SYSTEM_PARSER    = JFRTAG_JFR | JFRTAG_SYSTEM | JFRTAG_PARSER,
+	JFRCOMBINATION_JFR_SYSTEM_METADATA  = JFRTAG_JFR | JFRTAG_SYSTEM | JFRTAG_METADATA,
+	JFRCOMBINATION_JFR_SYSTEM_STREAMING = JFRTAG_JFR | JFRTAG_SYSTEM | JFRTAG_STREAMING,
+	JFRCOMBINATION_JFR_SYSTEM_THROTTLE  = JFRTAG_JFR | JFRTAG_SYSTEM | JFRTAG_THROTTLE,
+	JFRCOMBINATION_JFR_METADATA         = JFRTAG_JFR | JFRTAG_METADATA,
+	JFRCOMBINATION_JFR_EVENT            = JFRTAG_JFR | JFRTAG_EVENT,
+	JFRCOMBINATION_JFR_SETTING          = JFRTAG_JFR | JFRTAG_SETTING,
+	JFRCOMBINATION_JFR_DCMD             = JFRTAG_JFR | JFRTAG_DCMD,
+	JFRCOMBINATION_JFR_START            = JFRTAG_JFR | JFRTAG_START,
+	JFRCOMBINATION_JFRTAG_COUNT         = 14 /* the number of valid log tag combinations */
+} JFRLogTagCombination;
+
+typedef enum JFRLogOutputType {
+	JFROUTPUT_STDOUT,   /* 0 */
+	JFROUTPUT_STDERR,   /* 1 */
+	JFROUTPUT_FILE      /* 2 */
+} JFRLogOutputType;
+
+typedef struct JFRCheckpointEventTables {
+	J9HashTable *classTable;
+	J9HashTable *packageTable;
+	J9HashTable *moduleTable;
+	J9HashTable *classLoaderTable;
+	J9HashTable *methodTable;
+	J9HashTable *stringUTF8Table;
+	J9HashTable *threadGroupTable;
+	U_32 classCount;
+	U_32 packageCount;
+	U_32 moduleCount;
+	U_32 classLoaderCount;
+	U_32 methodCount;
+	U_32 threadGroupCount;
+	void **globalStringTable;
+	U_32 globalStringTableCount;
+	U_32 stackTraceCount;
+} JFRCheckpointEventTables;
+
 typedef struct JFRState {
 	char *jfrFileName;
 	const char *jfrCMDLineOption;
@@ -6285,8 +6378,18 @@ typedef struct JFRState {
 	IDATA blobFileDescriptor;
 	void *jfrWriter;
 	UDATA jfrChunkCount;
+	/* target ObjectAllocationSample events per second (default 150) */
+	UDATA objectAllocationSampleThrottleRate;
+	/* bytes interval between ObjectAllocationSample events per thread */
+	UDATA objectAllocationSampleInterval;
+	/* hires-clock ticks when the last GC cycle ended; 0 if no GC has occurred */
+	uint64_t lastGCCycleEndTicks;
 	I_64 chunkStartTime;
 	I_64 chunkStartTicks;
+	U_8 chunkGeneration;
+	U_64 lastGenerationFileCursor;
+	I_64 lastCheckpointEvent;
+	JFRCheckpointEventTables checkpointEventTables;
 	void *constantEvents;
 	BOOLEAN isConstantEventsInitialized;
 	BOOLEAN isStarted;
@@ -6325,7 +6428,15 @@ typedef struct JFRState {
 	IDATA currentPositionOffset;
 	IDATA maxPositionOffset;
 	jvmtiEnv *jvmtiAgent;
+	JFRLogOutputType jfrLogOutput;
+	char *jfrLogFileName;
+	IDATA logFileDescriptor;
+	/* The array is indexed by jdk.jfr.internal.LogTag ordinals. */
+	JFRLogLevel jfrLogTagSet[JFRCOMBINATION_JFRTAG_COUNT];
+	/* JFR logging is enabled by default; can be disabled via -Xlog:disable. */
+	jboolean jfrLogEnabled;
 } JFRState;
+#endif /* defined(J9VM_OPT_JFR) */
 
 typedef struct J9ReflectFunctionTable {
 	jobject  ( *idToReflectMethod)(struct J9VMThread* vmThread, jmethodID methodID) ;
@@ -6892,6 +7003,8 @@ typedef struct J9JavaVM {
 #endif /* defined(J9VM_OPT_SNAPSHOTS) */
 #if defined(J9VM_OPT_JFR)
 	U_32 loadedClassCount;
+	U_32 classLoaderCount;
+	U_32 moduleCount;
 #endif /* defined(J9VM_OPT_JFR) */
 #if JAVA_SPEC_VERSION >= 24
 	J9VMContinuation *blockedContinuations;

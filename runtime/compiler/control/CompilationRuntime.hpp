@@ -219,7 +219,8 @@ class TR_JProfilingQueue {
 public:
     TR_PERSISTENT_ALLOC(TR_Memory::PersistentInfo); // TODO: define its own category
     TR_JProfilingQueue()
-        : _firstQentry(NULL)
+        : _compInfo(NULL)
+        , _firstQentry(NULL)
         , _lastQentry(NULL)
         , _size(0)
         , _weight(0)
@@ -470,6 +471,21 @@ public:
     };
 
     struct CompilationStatistics {
+        CompilationStatistics()
+            : _heartbeatWindowCount(0)
+            , _windowStartTick(0)
+            , _sampleMessagesSent(0)
+            , _sampleMessagesReceived(0)
+            , _interpretedMethodSamples(0)
+            , _compiledMethodSamples(0)
+            , _compiledMethodSamplesIgnored(0)
+            , _ticksInIdleMode(0)
+            , _methodsCompiledOnCount(0)
+            , _methodsReachingSampleInterval(0)
+            , _methodsSelectedToRecompile(0)
+            , _methodsSampleWindowReset(0)
+        {}
+
         // perhaps not the greatest way to do this, but TR_Stats classes weren't an exact match
         uint32_t _heartbeatWindowCount;
         uint32_t _windowStartTick;
@@ -486,6 +502,8 @@ public:
     }; // CompilationStatistics
 
     struct CompilationStatsPerInterval {
+        CompilationStatsPerInterval() { reset(); }
+
         uint32_t _interpretedMethodSamples;
         uint32_t _compiledMethodSamples;
         uint32_t _numFirstTimeCompilationsInInterval;
@@ -524,6 +542,26 @@ public:
     static void *compilationEnd(J9VMThread *context, TR::IlGeneratorMethodDetails &details, J9JITConfig *jitConfig,
         void *startPC, void *oldStartPC, bool preventFutureMethodCountingOnFailure = true, TR_FrontEnd *vm = 0,
         TR_MethodToBeCompiled *entry = NULL, TR::Compilation *comp = NULL);
+
+    /**
+     * @brief
+     *    Releases the JNI global references that a MethodHandle thunk compile request holds
+     *    on its MethodHandle and argument. Must be called with VM access.
+     *
+     * @param vmThread the current J9VMThread
+     * @param details the TR::IlGeneratorMethodDetails
+     */
+    static void releaseMethodHandleThunkRefs(J9VMThread *vmThread, TR::IlGeneratorMethodDetails &details);
+
+    /**
+     * @brief
+     *    Releases the JNI global references held by a finished compilation queue entry that
+     *    was created for a MethodHandle thunk request. Does nothing in JITServer mode.
+     *
+     * @param vmThread the current J9VMThread
+     * @param entry the TR_MethodToBeCompiled
+     */
+    static void releaseMethodHandleThunkRefs(J9VMThread *vmThread, TR_MethodToBeCompiled *entry);
 #if defined(J9VM_OPT_JITSERVER)
     static JITServer::ServerStream *getStream();
 #endif /* defined(J9VM_OPT_JITSERVER) */

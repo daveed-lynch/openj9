@@ -112,16 +112,15 @@ getStackTraceElementIterator(J9VMThread *vmThread, void *voidUserData, UDATA byt
 }
 
 #if defined(DEBUG_BCV)
-static void cfdumpBytecodePrintFunction(void *userData, char *format, ...)
+static void
+cfdumpBytecodePrintFunction(void *userData, const char *format, ...)
 {
-	PORT_ACCESS_FROM_PORT((J9PortLibrary*)userData);
+	PORT_ACCESS_FROM_PORT((J9PortLibrary *)userData);
 	va_list args;
-	char outputBuffer[512] = {0};
 
 	va_start(args, format);
-	j9str_vprintf(outputBuffer, 512, format, args);
+	j9tty_vprintf(format, args);
 	va_end(args);
-	j9tty_printf(PORTLIB, "%s", outputBuffer);
 }
 #endif /* defined(DEBUG_BCV) */
 
@@ -293,13 +292,13 @@ static void
 virtualThreadMountBegin(JNIEnv *env, jobject thread)
 {
 	J9VMThread *currentThread = (J9VMThread *)env;
-	J9InternalVMFunctions const * const vmFuncs = currentThread->javaVM->internalVMFunctions;
+	J9JavaVM *vm = currentThread->javaVM;
+	J9InternalVMFunctions const * const vmFuncs = vm->internalVMFunctions;
 
 	j9object_t threadObj = J9_JNI_UNWRAP_REFERENCE(thread);
 	Assert_SC_true(IS_JAVA_LANG_VIRTUALTHREAD(currentThread, threadObj));
 
 	if (TrcEnabled_Trc_SC_VirtualThread_Info) {
-		J9JavaVM *vm = currentThread->javaVM;
 		j9object_t continuationObj = J9VMJAVALANGVIRTUALTHREAD_CONT(currentThread, threadObj);
 		J9VMContinuation *continuation = J9VMJDKINTERNALVMCONTINUATION_VMREF(currentThread, continuationObj);
 		Trc_SC_VirtualThread_Info(
